@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -134,6 +135,7 @@ const defaultForm = {
 };
 
 export default function CreateAgreementPage() {
+    const router = useRouter();
   const { authenticated, ready, address, walletClient, publicClient, logout, chainName, chainId, error: walletError, role } = useSafePayWallet();
   const tokenConfig = useTokenConfig();
   const tokenSymbol = tokenConfig.metadata?.symbol ?? "token";
@@ -275,7 +277,7 @@ export default function CreateAgreementPage() {
     setErrors({});
   };
 
-  const executeAgreementFlow = async () => {
+    const executeAgreementFlow = async () => {
     if (!authenticated) {
       throw new Error("Sign in before creating a SafePay agreement.");
     }
@@ -336,90 +338,54 @@ export default function CreateAgreementPage() {
     const approvalWindow = BigInt(parsed.data.approvalWindow * 24 * 60 * 60);
     const disputeWindow = BigInt(parsed.data.disputeWindow * 24 * 60 * 60);
 
-    const balance = await publicClient.readContract({
-      address: tokenAddress,
-      abi: erc20Abi,
-      functionName: "balanceOf",
-      args: [address],
-    });
-    if (balance < totalAmount) {
-      throw new Error(
-        `Your ${tokenMetadata.symbol} balance is below the required ${parsed.data.totalAmount.toLocaleString("en-US")} total.`,
-      );
-    }
-
-    let agreementId = fundingPending ? createdAgreementId : null;
-
-    if (agreementId === null) {
-      const allowance = await publicClient.readContract({
-        address: tokenAddress,
-        abi: erc20Abi,
-        functionName: "allowance",
-        args: [address, contractAddress],
-      });
-
-      if (allowance < totalAmount) {
-        const approvalHash = await walletClient.writeContract({
-          address: tokenAddress,
-          abi: erc20Abi,
-          functionName: "approve",
-          args: [contractAddress, totalAmount],
-        });
-        const approvalReceipt = await publicClient.waitForTransactionReceipt({ hash: approvalHash });
-        if (approvalReceipt.status !== "success") throw new Error("Token approval failed. No agreement was created.");
-      }
-
-      const createHash = await walletClient.writeContract({
-        address: contractAddress,
-        abi: safePayEscrowAbi,
-        functionName: "createAgreement",
-        args: [
-          parsed.data.contractorAddress as Address,
-          tokenAddress,
-          resolverAddress,
-          totalAmount,
-          approvalWindow,
-          disputeWindow,
-          cancellationFee,
-          milestones,
-        ],
-      });
-
-      const createReceipt = await publicClient.waitForTransactionReceipt({ hash: createHash });
-      if (createReceipt.status !== "success") throw new Error("Agreement creation failed.");
-      const [createdEvent] = parseEventLogs({
-        abi: safePayEscrowAbi,
-        logs: createReceipt.logs,
-        eventName: "AgreementCreated",
-        strict: true,
-      });
-      if (!createdEvent) throw new Error(`Agreement was created (transaction ${createHash}), but its id could not be read from the receipt.`);
-      agreementId = Number(createdEvent.args.agreementId);
-      if (!Number.isSafeInteger(agreementId)) throw new Error("The created agreement id is outside the supported range.");
-      setCreatedAgreementId(agreementId);
-      setFundingPending(true);
-    }
-
-    if (agreementId === null) throw new Error("The agreement draft could not be recovered. Please contact support before retrying.");
-
-    const existingAgreement = await publicClient.readContract({
+    // Create the draft only. Nothing is locked until the contractor accepts and the client funds it.
+    const createHash = await walletClient.writeContract({
       address: contractAddress,
       abi: safePayEscrowAbi,
-      functionName: "getAgreement",
-      args: [BigInt(agreementId)],
+      functionName: "createAgreement",
+      args: [
+        parsed.data.contractorAddress as Address,
+        tokenAddress,
+        resolverAddress,
+        totalAmount,
+        approvalWindow,
+        disputeWindow,
+        cancellationFee,
+        milestones,
+      ],
     });
-    if (Number(existingAgreement.status) !== 1) {
-      const fundHash = await walletClient.writeContract({
-        address: contractAddress,
-        abi: safePayEscrowAbi,
-        functionName: "fundAgreement",
-        args: [BigInt(agreementId)],
-      });
-      const fundReceipt = await publicClient.waitForTransactionReceipt({ hash: fundHash });
-      if (fundReceipt.status !== "success") throw new Error(`Agreement #${agreementId} was created, but funding failed. Open the draft to retry funding.`);
-    }
 
-    setFundingPending(false);
+    const createReceipt = await publicClient.waitForTransactionReceipt({ hash: createHash });
+    if (createReceipt.status !== "success") throw new Error("Agreement creation failed.");
+    const [createdEvent] = parseEventLogs({
+      abi: safePayEscrowAbi,
+      logs: createReceipt.logs,
+      eventName: "AgreementCreated",
+      strict: true,
+    });
+    if (!createdEvent) {
+      throw new Error(`Agreement was created (transaction ${createHash}), but its id could not be read from the receipt.`);
+    }
+    const agreementId = Number(createdEvent.args.agreementId);
+    if (!Number.isSafeInteger(agreementId)) {
+      throw new Error("The created agreement id is outside the supported range.");
+    }
+    setCreatedAgreementId(agreementId);
+
+    // Save the readable milestone descriptions so the contractor can review them before accepting.
+    try {
+      await fetch("/api/agreement-details", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agreementId,
+          descriptions: parsed.data.milestones.map((milestone) => milestone.description),
+          contractorEmail: parsed.data.contractorEmail || undefined,
+        }),
+      });
+    } catch {
+      // The agreement exists on chain. The agreement page warns if the descriptions are missing.
+    }
 
     return agreementId;
   };
@@ -440,10 +406,8 @@ export default function CreateAgreementPage() {
     setSuccessMessage(null);
 
     try {
-      const agreementId = await executeAgreementFlow();
-      setSuccessMessage(`Agreement #${agreementId} was created in the connected contract.`);
-      setReview(false);
-      setForm(defaultForm);
+           const agreementId = await executeAgreementFlow();
+            router.push(`/agreement/${agreementId}`);
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : "The agreement could not be created.");
     } finally {

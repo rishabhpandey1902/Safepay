@@ -16,7 +16,7 @@ export const dynamicClient = environmentId
     })
   : null;
 
-if (dynamicClient) {
+if (dynamicClient && typeof window !== "undefined") {
   addEvmExtension();
-  if (typeof window !== "undefined") void initializeClient();
+  void initializeClient();
 }

@@ -9,7 +9,7 @@ export function RoleSignInLink({
 }: Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> & { children: ReactNode }) {
   return (
     <Link
-      href="/"
+      href="/signin?mode=signin"
       {...props}
       onClick={(event) => {
         window.sessionStorage.setItem(

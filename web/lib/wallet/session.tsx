@@ -86,8 +86,15 @@ export function WalletSessionProvider({
     setWalletStateValue({ authenticated: false, sdkReady: true });
   }, []);
 
-  const setWalletState = useCallback((state: WalletState | ((current: WalletState) => WalletState)) => {
-    setWalletStateValue(state);
+    const setWalletState = useCallback((state: WalletState | ((current: WalletState) => WalletState)) => {
+    setWalletStateValue((current) => {
+      const next = typeof state === "function" ? state(current) : state;
+      const keys = new Set([...Object.keys(current), ...Object.keys(next)]) as Set<keyof WalletState>;
+      for (const key of keys) {
+        if (current[key] !== next[key]) return next;
+      }
+      return current;
+    });
   }, []);
 
   const logoutSdk = walletState.logoutSdk;

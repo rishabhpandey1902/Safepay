@@ -1,5 +1,6 @@
 "use client";
 
+import { acceptanceTypedData } from "@/lib/acceptance";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -97,6 +98,9 @@ export default function AgreementPage() {
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
   const [chainTimestamp, setChainTimestamp] = useState<bigint | null>(null);
+  const [details, setDetails] = useState<string[] | null>(null);
+  const [acceptedAt, setAcceptedAt] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const contractAddress = process.env.NEXT_PUBLIC_SAFE_PAY_ESCROW_ADDRESS as Address | undefined;
   const configurationError = !contractAddress || !isAddress(contractAddress) || contractAddress === "0x0000000000000000000000000000000000000000"
@@ -156,6 +160,40 @@ export default function AgreementPage() {
     void loadAgreement();
   }, [agreementId, configurationError, contractAddress, publicClient, refreshTick, routeError, tokenConfig]);
 
+
+  useEffect(() => {
+    if (configurationError || routeError) return;
+    let active = true;
+    const loadOffChain = async () => {
+      try {
+        const [detailsResponse, acceptanceResponse] = await Promise.all([
+          fetch(`/api/agreement-details?id=${agreementId}`, { cache: "no-store" }),
+          fetch(`/api/acceptance?ids=${agreementId}`, { cache: "no-store" }),
+        ]);
+        const detailsBody = (await detailsResponse.json()) as { descriptions?: string[] };
+        const acceptanceBody = (await acceptanceResponse.json()) as {
+          accepted?: Record<string, { createdAt: string }>;
+        };
+        if (!active) return;
+        setDetails(
+          detailsResponse.ok && Array.isArray(detailsBody.descriptions) ? detailsBody.descriptions : null,
+        );
+        setAcceptedAt(
+          acceptanceResponse.ok ? acceptanceBody.accepted?.[String(agreementId)]?.createdAt ?? null : null,
+        );
+      } catch {
+        if (active) {
+          setDetails(null);
+          setAcceptedAt(null);
+        }
+      }
+    };
+    void loadOffChain();
+    return () => {
+      active = false;
+    };
+  }, [agreementId, configurationError, routeError, refreshTick]);
+
   useEffect(() => {
     if (!contractAddress || !isAddress(contractAddress)) return;
     let active = true;
@@ -180,6 +218,57 @@ export default function AgreementPage() {
   const canAct = isClient || isContractor;
   const canFund = Boolean(agreement && isClient && agreement.status === 0);
   const canCancel = Boolean(agreement && canAct && agreement.status === 1);
+  const shareUrl = typeof window !== "undefined" ? `${window.location.origin}/agreement/${agreementId}` : "";
+            const shareText = `I created a SafePay agreement for you. Review and accept it here: ${shareUrl}`;
+const toDays = (seconds: bigint) => Number(seconds) / 86_400;
+
+            const copyLink = async () => {
+              try {
+              await navigator.clipboard.writeText(shareUrl);
+            setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+              setError("Could not copy the link. Select it and copy it manually.");
+    }
+  };
+
+  const handleAccept = async () => {
+    if (!agreement || !contractAddress || !isContractor) return;
+            setBusyAction("accept");
+            setError(null);
+            try {
+      const signer = await getWalletClient();
+            if (!signer) throw new Error("Your wallet connection is not ready yet.");
+            const typedData = acceptanceTypedData(contractAddress, {
+              agreementId: BigInt(agreementId),
+            client: agreement.client,
+            contractor: agreement.contractor,
+            token: agreement.token,
+            resolver: agreement.resolver,
+            totalAmount: agreement.totalAmount,
+            approvalWindow: agreement.approvalWindow,
+            disputeWindow: agreement.disputeWindow,
+            clientCancellationFee: agreement.clientCancellationFee,
+        milestones: milestones.map((milestone) => ({
+              amount: milestone.amount,
+            descriptionHash: milestone.descriptionHash,
+        })),
+      });
+            const signature = await signer.signTypedData(typedData);
+            const response = await fetch("/api/acceptance", {
+              method: "POST",
+            headers: {"Content-Type": "application/json" },
+            body: JSON.stringify({agreementId, signature}),
+          });
+            const body = (await response.json()) as {error ?: string};
+            if (!response.ok) throw new Error(body.error ?? "Could not record your acceptance.");
+          setRefreshTick((current) => current + 1);
+          } catch (acceptError) {
+              setError(acceptError instanceof Error ? acceptError.message : "Could not accept the agreement.");
+          } finally {
+              setBusyAction(null);
+          }
+        };
 
   const getWalletClient = async () => {
     if (!walletClient || !authenticated || !address) return null;
@@ -303,7 +392,7 @@ export default function AgreementPage() {
       }
 
       addTxLog(action, hash);
-  if (!(await updateTxLog(hash))) throw new Error("The transaction failed or could not be confirmed. Check its status below.");
+      if (!(await updateTxLog(hash))) throw new Error("The transaction failed or could not be confirmed. Check its status below.");
       setRefreshTick((current) => current + 1);
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "The transaction could not be completed.");
@@ -401,20 +490,115 @@ export default function AgreementPage() {
           <div className="rounded-3xl border border-slate-800 bg-slate-900 p-8 text-slate-200">Loading agreement details…</div>
         ) : agreement ? (
           <>
-            {canFund ? (
-              <section className="mb-6 flex flex-wrap items-center justify-between gap-4 border border-amber-500/30 bg-amber-950/20 p-4">
+            {isClient && agreement.status === 0 ? (
+              <section className="mb-6 space-y-4 border border-amber-500/30 bg-amber-950/20 p-4">
                 <div>
-                  <h2 className="font-semibold text-white">Draft agreement not funded</h2>
-                  <p className="mt-1 text-sm text-slate-300">Funding transfers the full agreed amount into SafePay.</p>
+                  <h2 className="font-semibold text-white">
+                    {acceptedAt ? "Contractor accepted. Ready to fund." : "Waiting for the contractor to accept"}
+                  </h2>
+                  <p className="mt-1 text-sm text-slate-300">
+                    {acceptedAt
+                      ? `Accepted ${new Date(acceptedAt).toLocaleString()}. Funding transfers the full agreed amount into SafePay.`
+                      : "Nothing is locked yet. Send the contractor this link. They sign in, review the terms and accept. Then you can fund."}
+                  </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => void handleAction("fund")}
-                  disabled={busyAction !== null}
-                  className="w-full bg-amber-700 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
-                >
-                  {busyAction === "fund" ? "Funding agreement…" : "Fund agreement"}
-                </button>
+
+                {!acceptedAt ? (
+                  <div className="space-y-3">
+                    <input
+                      readOnly
+                      value={shareUrl}
+                      onFocus={(event) => event.currentTarget.select()}
+                      className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white"
+                    />
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void copyLink()}
+                        className="rounded-lg bg-violet-600 px-3 py-2 text-sm font-semibold text-white hover:bg-violet-500"
+                      >
+                        {copied ? "Copied" : "Copy link"}
+                      </button>
+                      <a
+                        href={`https://wa.me/?text=${encodeURIComponent(shareText)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="rounded-lg border border-slate-600 px-3 py-2 text-sm font-semibold text-slate-100 hover:border-slate-400"
+                      >
+                        WhatsApp
+                      </a>
+                      <a
+                        href={`mailto:?subject=${encodeURIComponent("SafePay agreement to review")}&body=${encodeURIComponent(shareText)}`}
+                        className="rounded-lg border border-slate-600 px-3 py-2 text-sm font-semibold text-slate-100 hover:border-slate-400"
+                      >
+                        Email
+                      </a>
+                    </div>
+                    <p className="break-all text-xs text-slate-400">
+                      The contractor must sign in with the wallet address you entered: {agreement.contractor}
+                    </p>
+                  </div>
+                ) : null}
+
+                {acceptedAt && canFund ? (
+                  <button
+                    type="button"
+                    onClick={() => void handleAction("fund")}
+                    disabled={busyAction !== null}
+                    className="w-full bg-amber-700 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                  >
+                    {busyAction === "fund" ? "Funding agreement…" : "Fund agreement"}
+                  </button>
+                ) : null}
+              </section>
+            ) : null}
+
+            {isContractor && agreement.status === 0 ? (
+              <section className="mb-6 space-y-4 border border-teal-500/30 bg-teal-950/20 p-4">
+                {acceptedAt ? (
+                  <div>
+                    <h2 className="font-semibold text-white">You accepted this agreement</h2>
+                    <p className="mt-1 text-sm text-slate-300">
+                      Waiting for the client to fund it. You can start work once it is funded.
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    <div>
+                      <h2 className="font-semibold text-white">You were invited to this agreement</h2>
+                      <p className="mt-1 text-sm text-slate-300">
+                        Review the terms. Accepting signs a message with your wallet. It does not move any money.
+                      </p>
+                    </div>
+                    <ul className="space-y-1 text-sm text-slate-200">
+                      <li>Total: {formatAmount(agreement.totalAmount)}</li>
+                      <li>Approval window: {toDays(agreement.approvalWindow)} days (then payment releases automatically)</li>
+                      <li>Dispute window: {toDays(agreement.disputeWindow)} days</li>
+                      <li>Client cancellation fee: {formatAmount(agreement.clientCancellationFee)}</li>
+                    </ul>
+                    <ol className="space-y-1 text-sm text-slate-200">
+                      {milestones.map((milestone, index) => (
+                        <li key={index} className="flex justify-between gap-4">
+                          <span>{index + 1}. {details?.[index] ?? "Description not available"}</span>
+                          <span className="shrink-0">{formatAmount(milestone.amount)}</span>
+                        </li>
+                      ))}
+                    </ol>
+                    {details === null ? (
+                      <p className="text-xs text-amber-200">
+                        The milestone descriptions were not saved. Check them with the client before accepting.
+                      </p>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => void handleAccept()}
+                      disabled={busyAction !== null}
+                      className="w-full bg-teal-700 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-teal-600 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                    >
+                      {busyAction === "accept" ? "Waiting for your signature…" : "Accept and sign"}
+                    </button>
+                  </>
+                )}
               </section>
             ) : null}
 
@@ -459,7 +643,7 @@ export default function AgreementPage() {
                         <tr key={index} className="border-t border-slate-800 align-top">
                           <td className="px-4 py-4 text-slate-200">#{index + 1}</td>
                           <td className="px-4 py-4 text-slate-200">
-                            <div className="max-w-md break-words">{milestone.descriptionURI || "No note on file"}</div>
+                            <div className="max-w-md break-words">{details?.[index] || milestone.descriptionURI || "No note on file"}</div>
                           </td>
                           <td className="px-4 py-4 text-slate-200">
                             {formatAmount(milestone.amount)}
@@ -616,6 +800,8 @@ export default function AgreementPage() {
                 </button>
               </section>
             ) : null}
+
+            
 
             {txLogs.length > 0 ? (
               <section className="mt-8 rounded-3xl border border-slate-800 bg-slate-900 p-5">

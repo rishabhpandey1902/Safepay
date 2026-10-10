@@ -1,132 +1,191 @@
 "use client";
 
-import Link from "next/link";
-import { useState } from "react";
-import { z } from "zod";
+import { useRouter } from "next/navigation";
+import { useEffect, useState, type FormEvent } from "react";
 
-import { useSafePayWallet } from "@/lib/wallet/useSafePayWallet";
+import { profileInputSchema, type FreelancerProfile } from "@/lib/profiles-schema";
+import { submitSigned } from "@/lib/projects-client";
+import { serviceCategories } from "@/lib/services-schema";
 import { RoleSignInLink } from "@/lib/wallet/role-sign-in-link";
-import {
-  serviceCategories,
-  serviceListingSchema,
-  type ServiceListingInput,
-} from "@/lib/services-schema";
+import { useSafePayWallet } from "@/lib/wallet/useSafePayWallet";
 
-export default function NewServicePage() {
-  const { authenticated, address, walletClient, provider, chainName, chainId } = useSafePayWallet();
-  const [form, setForm] = useState<{
-    title: string;
-    description: string;
-    category: ServiceListingInput["category"];
-    country: string;
-    startingPriceUsd: string;
-    deliveryDays: string;
-    providerWalletAddress: string;
-  }>({
-    title: "",
-    description: "",
-    category: serviceCategories[0],
-    country: "",
-    startingPriceUsd: "",
-    deliveryDays: "7",
-    providerWalletAddress: "",
-  });
-  const [error, setError] = useState<string | null>(null);
+export default function FreelancerProfilePage() {
+  const wallet = useSafePayWallet();
+  const router = useRouter();
+  const [displayName, setDisplayName] = useState("");
+  const [headline, setHeadline] = useState("");
+  const [bio, setBio] = useState("");
+  const [skills, setSkills] = useState("");
+  const [category, setCategory] = useState<string>(serviceCategories[0]);
+  const [country, setCountry] = useState("");
+  const [experience, setExperience] = useState("");
+  const [rate, setRate] = useState("");
   const [busy, setBusy] = useState(false);
-  const [createdId, setCreatedId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const createListing = async (event: React.FormEvent<HTMLFormElement>) => {
+  const me = wallet.address?.toLowerCase();
+
+  useEffect(() => {
+    if (!me) return;
+    let active = true;
+    fetch("/api/profiles", { cache: "no-store" })
+      .then(async (response) => {
+        const body = (await response.json()) as { profiles?: FreelancerProfile[] };
+        const mine = body.profiles?.find((profile) => profile.address === me && !profile.isDemo);
+        if (!active || !mine) return;
+        setDisplayName(mine.displayName);
+        setHeadline(mine.headline);
+        setBio(mine.bio);
+        setSkills(mine.skills.join(", "));
+        setCategory(mine.category);
+        setCountry(mine.country);
+        setExperience(String(mine.experienceYears));
+        setRate(String(mine.hourlyRateUsd));
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [me]);
+
+  const onSubmit = async (event: FormEvent) => {
     event.preventDefault();
     setError(null);
-    if (!authenticated || !address || !walletClient || provider !== "dynamic") {
-      setError("Choose Offer services and connect the listing owner through Dynamic.");
+    if (!wallet.address || !wallet.walletClient) {
+      setError("Your wallet is not ready yet. Please try again.");
       return;
     }
-    if (address.toLowerCase() !== form.providerWalletAddress.trim().toLowerCase()) {
-      setError("Provider wallet address must match the connected wallet.");
-      return;
-    }
-
-    const input = serviceListingSchema.safeParse({
-      ...form,
-      startingPriceUsd: Number(form.startingPriceUsd),
-      deliveryDays: Number(form.deliveryDays),
+    const parsed = profileInputSchema.safeParse({
+      displayName,
+      headline,
+      bio,
+      skills: skills.split(",").map((skill) => skill.trim()).filter(Boolean),
+      category,
+      country,
+      experienceYears: experience === "" ? Number.NaN : Number(experience),
+      hourlyRateUsd: Number(rate),
     });
-    if (!input.success) {
-      setError(input.error.issues.map((issue) => issue.message).join(" "));
+    if (!parsed.success) {
+      setError(parsed.error.issues[0]?.message ?? "Check the form and try again.");
       return;
     }
-
     setBusy(true);
     try {
-      const challengeResponse = await fetch("/api/services/auth", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "create",
-          address,
-          listing: input.data,
-        }),
+      await submitSigned<{ profile: FreelancerProfile }>({
+        action: "save_profile",
+        endpoint: "/api/profiles",
+        address: wallet.address,
+        walletClient: wallet.walletClient,
+        payload: parsed.data,
       });
-      const challengeBody: unknown = await challengeResponse.json();
-      if (!challengeResponse.ok) {
-        const body = challengeBody as { error?: string };
-        throw new Error(body.error ?? "Could not authorize listing creation.");
-      }
-      const challenge = z.object({ nonce: z.string().uuid(), message: z.string() }).parse(challengeBody);
-      const signature = await walletClient.signMessage({
-        account: address,
-        message: challenge.message,
-      });
-      const response = await fetch("/api/services", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "create",
-          nonce: challenge.nonce,
-          address,
-          signature,
-          listing: input.data,
-        }),
-      });
-      const body: unknown = await response.json();
-      if (!response.ok) {
-        const result = body as { error?: string };
-        throw new Error(result.error ?? "Could not save the service listing.");
-      }
-      const result = z.object({ id: z.string() }).parse(body);
-      setCreatedId(result.id);
+      router.push("/services");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not save the service listing.");
+      setError(cause instanceof Error ? cause.message : "Could not save your profile.");
     } finally {
       setBusy(false);
     }
   };
 
+  if (!wallet.ready) {
+    return <main className="flex-1 bg-slate-950 p-10 text-slate-300">Loading…</main>;
+  }
+
+  if (!wallet.authenticated) {
+    return (
+      <main className="flex flex-1 items-center justify-center bg-slate-950 px-6 py-10">
+        <div className="w-full max-w-lg rounded-3xl border border-slate-800 bg-slate-900 p-8 text-slate-50">
+          <h1 className="text-2xl font-semibold">Create your freelancer profile</h1>
+          <p className="mt-3 text-slate-300">
+            Sign up as someone who gets paid, so clients can find and hire you.
+          </p>
+          <RoleSignInLink className="mt-6 inline-flex w-full items-center justify-center rounded-xl bg-teal-700 px-4 py-3 font-semibold hover:bg-teal-600">
+            Sign in or sign up
+          </RoleSignInLink>
+        </div>
+      </main>
+    );
+  }
+
+  if (wallet.role !== "freelancer") {
+    return (
+      <main className="flex flex-1 items-center justify-center bg-slate-950 px-6 py-10">
+        <div className="w-full max-w-lg rounded-3xl border border-slate-800 bg-slate-900 p-8 text-slate-50">
+          <h1 className="text-2xl font-semibold">Freelancer account needed</h1>
+          <p className="mt-3 text-slate-300">
+            Profiles belong to accounts for getting paid. Log out, then sign in with &quot;I want to get paid&quot;.
+          </p>
+          <button
+            type="button"
+            onClick={() => void wallet.logout()}
+            className="mt-6 rounded-xl bg-violet-600 px-4 py-3 font-semibold hover:bg-violet-500"
+          >
+            Log out
+          </button>
+        </div>
+      </main>
+    );
+  }
+
+  const field = "mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white";
+
   return (
-    <main className="min-h-screen bg-slate-950 px-5 py-10 text-slate-100 sm:px-8">
-      <section className="mx-auto max-w-3xl rounded-3xl border border-slate-800 bg-slate-900 p-6 sm:p-8">
-        <Link href="/services" className="text-sm text-violet-300 hover:text-violet-200">← Services</Link>
-        <h1 className="mt-5 text-3xl font-semibold">Create a service listing</h1>
-        <p className="mt-2 text-sm text-slate-400">Creating a listing only stores marketplace information. It does not create an escrow agreement.</p>
-        {!authenticated ? <RoleSignInLink className="mt-6 inline-block rounded-xl bg-violet-600 px-4 py-3 font-semibold">Choose Offer services / Dynamic and sign in</RoleSignInLink> : null}
-        {authenticated && provider !== "dynamic" ? <p role="alert" className="mt-5 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-100">Listings require the Offer services role and a Dynamic wallet. Log out before changing roles.</p> : null}
-        {authenticated ? <p className="mt-4 break-all text-xs text-slate-400">{address} · {provider} · {chainName}{chainId ? ` (chain ${chainId})` : ""}</p> : null}
-        {createdId ? <p role="status" className="mt-5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-emerald-200">Listing created. <Link className="underline" href={`/services/${createdId}`}>View your listing</Link></p> : null}
-        {error ? <p role="alert" className="mt-5 rounded-xl border border-red-500/40 bg-red-950/50 p-4 text-red-200">{error}</p> : null}
-        <form onSubmit={(event) => void createListing(event)} className="mt-6 grid gap-4">
-          <label className="text-sm text-slate-300">Title<input required minLength={5} maxLength={100} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white" /></label>
-          <label className="text-sm text-slate-300">Description<textarea required minLength={20} maxLength={2000} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} rows={5} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white" /></label>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <label className="text-sm text-slate-300">Category<select value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value as ServiceListingInput["category"] })} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white">{serviceCategories.map((category) => <option key={category}>{category}</option>)}</select></label>
-            <label className="text-sm text-slate-300">Country<input required maxLength={80} value={form.country} onChange={(event) => setForm({ ...form, country: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white" /></label>
-            <label className="text-sm text-slate-300">Starting price (USD)<input required type="number" min="0.01" max="1000000" step="0.01" value={form.startingPriceUsd} onChange={(event) => setForm({ ...form, startingPriceUsd: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white" /></label>
-            <label className="text-sm text-slate-300">Delivery days<input required type="number" min="1" max="365" value={form.deliveryDays} onChange={(event) => setForm({ ...form, deliveryDays: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white" /></label>
-          </div>
-          <label className="text-sm text-slate-300">Provider wallet address<input required value={form.providerWalletAddress} onChange={(event) => setForm({ ...form, providerWalletAddress: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-white" placeholder={address ?? "0x…"} /></label>
-          <button disabled={busy || Boolean(createdId)} className="mt-2 rounded-xl bg-violet-600 px-5 py-3 font-semibold text-white hover:bg-violet-500 disabled:opacity-50">{busy ? "Signing and saving…" : "Sign and publish listing"}</button>
-        </form>
-      </section>
+    <main className="flex-1 bg-slate-950 px-6 py-10 text-slate-50">
+      <form onSubmit={(event) => void onSubmit(event)} className="mx-auto max-w-2xl space-y-4 rounded-3xl border border-slate-800 bg-slate-900 p-8">
+        <h1 className="text-2xl font-semibold">Your freelancer profile</h1>
+        <p className="text-sm text-slate-400">
+          Clients see this on Find freelancer. Payments go to this account&apos;s wallet:
+          <span className="mt-1 block break-all text-xs text-slate-500">{wallet.address}</span>
+        </p>
+        <label className="block text-sm text-slate-300">
+          Your name
+          <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} className={field} />
+        </label>
+        <label className="block text-sm text-slate-300">
+          Headline
+          <input value={headline} onChange={(event) => setHeadline(event.target.value)} placeholder="Full-stack web developer" className={field} />
+        </label>
+        <label className="block text-sm text-slate-300">
+          About you
+          <textarea value={bio} onChange={(event) => setBio(event.target.value)} rows={5} className={field} />
+        </label>
+        <label className="block text-sm text-slate-300">
+          Skills (separate with commas)
+          <input value={skills} onChange={(event) => setSkills(event.target.value)} placeholder="React, Next.js, Node.js" className={field} />
+        </label>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="block text-sm text-slate-300">
+            Domain
+            <select value={category} onChange={(event) => setCategory(event.target.value)} className={field}>
+              {serviceCategories.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block text-sm text-slate-300">
+            Country
+            <input value={country} onChange={(event) => setCountry(event.target.value)} className={field} />
+          </label>
+          <label className="block text-sm text-slate-300">
+            Years of experience
+            <input value={experience} onChange={(event) => setExperience(event.target.value)} type="number" min="0" max="60" step="1" className={field} />
+          </label>
+          <label className="block text-sm text-slate-300">
+            Rate (USD per hour)
+            <input value={rate} onChange={(event) => setRate(event.target.value)} type="number" min="1" step="0.01" className={field} />
+          </label>
+        </div>
+        {error ? (
+          <p role="alert" className="rounded-lg border border-red-500/40 bg-red-950/50 p-3 text-sm text-red-200">{error}</p>
+        ) : null}
+        <button
+          type="submit"
+          disabled={busy}
+          className="w-full rounded-xl bg-teal-700 px-4 py-3 font-semibold hover:bg-teal-600 disabled:opacity-50"
+        >
+          {busy ? "Waiting for your signature…" : "Sign and save profile"}
+        </button>
+        <p className="text-xs text-slate-500">Signing proves the profile is yours. It does not move any money.</p>
+      </form>
     </main>
   );
 }

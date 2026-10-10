@@ -3,7 +3,7 @@
 import { DynamicProvider } from "@dynamic-labs-sdk/react-hooks";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { PrivyProvider, usePrivy, useWallets } from "@privy-io/react-auth";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPublicClient, createWalletClient, custom, http, type Address } from "viem";
 
 import { monadTestnet } from "@/lib/monad";
@@ -86,12 +86,19 @@ function PrivyWalletBridge({ children }: { children: ReactNode }) {
     (candidate) => candidate.walletClientType === "privy" || candidate.walletClientType === "privy-v2",
   );
 
-  const loginUser = useCallback(async () => login({ loginMethods: ["email"] }), [login]);
-  const getAuthToken = useCallback(() => getAccessToken(), [getAccessToken]);
+    // Privy returns new function objects on every render. Keep the latest ones in a ref
+  // so the callbacks below stay stable and don't re-trigger the wallet effect.
+  const privyRef = useRef({ login, logout, getAccessToken });
+  useEffect(() => {
+    privyRef.current = { login, logout, getAccessToken };
+  });
+
+  const loginUser = useCallback(async () => privyRef.current.login({ loginMethods: ["email"] }), []);
+  const getAuthToken = useCallback(() => privyRef.current.getAccessToken(), []);
   const logoutUser = useCallback(async () => {
-    await logout();
+    await privyRef.current.logout();
     clearRole();
-  }, [logout, clearRole]);
+  }, [clearRole]);
 
   useEffect(() => {
     let active = true;
@@ -212,8 +219,17 @@ function PrivyWalletBridge({ children }: { children: ReactNode }) {
         subscribedProvider.removeListener("chainChanged", onChainChanged);
       }
     };
-  }, [ready, authenticated, wallet, wallets.length, setWalletState, loginUser, getAuthToken, logoutUser]);
-
+  }, [
+    ready,
+    authenticated,
+    wallet?.address,
+    wallet?.walletClientType,
+    wallets.length,
+    setWalletState,
+    loginUser,
+    getAuthToken,
+    logoutUser,
+  ]);
   return <><WalletStatus />{children}</>;
 }
 
