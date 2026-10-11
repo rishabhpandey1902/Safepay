@@ -1,111 +1,121 @@
+import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { agreementDraftSchema } from "@/lib/agreement-draft";
 
-const requestSchema = z.object({ text: z.string().trim().min(1).max(2000) });
+export const runtime = "nodejs";
+export const maxDuration = 30;
 
-const openAiResponseSchema = z.object({
-  choices: z.array(z.object({ message: z.object({ content: z.string().nullable() }) })).min(1),
+const bodySchema = z.object({
+  text: z.string().trim().min(10, "Describe the payment in a sentence or two.").max(2000),
 });
 
-const responseJsonSchema = {
-  name: "agreement_draft",
-  strict: true,
-  schema: {
-    type: "object",
-    properties: {
-      recipient: { type: "string" },
-      amount: { type: "integer", minimum: 1 },
-      milestones: {
-        type: "array",
-        minItems: 1,
-        maxItems: 50,
-        items: {
-          type: "object",
-          properties: {
-            description: { type: "string" },
-            amount: { type: "integer", minimum: 1 },
-          },
-          required: ["description", "amount"],
-          additionalProperties: false,
-        },
-      },
-    },
-    required: ["recipient", "amount", "milestones"],
-    additionalProperties: false,
-  },
-} as const;
+const instruction = `You turn a plain-language description of a payment into JSON.
+Reply with ONLY a JSON object in this exact shape:
+{"recipient": string, "amount": integer, "milestones": [{"description": string, "amount": integer}]}
+
+Rules:
+- Amounts are whole numbers in the payment token. Treat 1 token as 1 US dollar.
+- Convert shorthand: "30k" is 30000, "1 lakh" is 100000, "2.5 lakh" is 250000.
+- The milestone amounts must add up exactly to "amount".
+- Use between 1 and 10 milestones. Keep each description under 80 characters.
+- If no person is named, use "Contractor" as the recipient.
+- Never invent amounts that are not in the text.
+- If the text does not describe a payment, reply {"error": "Describe who you are paying, the total, and when each payment is released."}`;
+
+// A small per-visitor limit protects the free daily quota.
+const hits = new Map<string, number[]>();
+function tooMany(ip: string): boolean {
+  const now = Date.now();
+  const recent = (hits.get(ip) ?? []).filter((time) => now - time < 60_000);
+  if (recent.length >= 6) {
+    hits.set(ip, recent);
+    return true;
+  }
+  recent.push(now);
+  hits.set(ip, recent);
+  return false;
+}
 
 export async function POST(request: Request) {
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return Response.json({ error: "Send a valid JSON request." }, { status: 400 });
-  }
-
-  const parsedRequest = requestSchema.safeParse(body);
-  if (!parsedRequest.success) {
-    return Response.json({ error: "Describe the agreement in 1 to 2,000 characters." }, { status: 400 });
-  }
-
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    return Response.json({ error: "The description assistant is not configured on the server." }, { status: 503 });
+    return NextResponse.json({ error: "The description assistant is not configured on the server." }, { status: 503 });
   }
 
+  const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "local";
+  if (tooMany(ip)) {
+    return NextResponse.json({ error: "Too many requests. Wait a minute, or fill in the form by hand." }, { status: 429 });
+  }
+
+  const parsedBody = bodySchema.safeParse(await request.json().catch(() => null));
+  if (!parsedBody.success) {
+    return NextResponse.json({ error: parsedBody.error.issues[0]?.message ?? "Invalid description." }, { status: 400 });
+  }
+
+  const model = process.env.GEMINI_MODEL ?? "gemini-flash-latest";
+
+  let reply: unknown;
   try {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: instruction }] },
+          contents: [{ role: "user", parts: [{ text: parsedBody.data.text }] }],
+          generationConfig: { responseMimeType: "application/json", temperature: 0.1, maxOutputTokens: 1000 },
+        }),
+        signal: AbortSignal.timeout(20_000),
       },
-      body: JSON.stringify({
-        model: process.env.OPENAI_MODEL ?? "gpt-4o-mini",
-        temperature: 0,
-        response_format: { type: "json_schema", json_schema: responseJsonSchema },
-        messages: [
-          {
-            role: "system",
-            content:
-              "Turn the user's plain-language payment agreement into a draft. Return rupee amounts as whole INR numbers (for example, 1 lakh = 100000 and 30k = 30000). Include each stated payment condition as a milestone with a concise description. Do not invent a recipient, amount, or milestone. The milestone amounts must sum exactly to the total amount. If details are ambiguous, make the most conservative literal interpretation; the user will review and edit the draft.",
-          },
-          { role: "user", content: parsedRequest.data.text },
-        ],
-      }),
-      cache: "no-store",
-      signal: AbortSignal.timeout(30000),
-    });
+    );
 
     if (!response.ok) {
-      return Response.json({ error: "The description could not be processed right now. Please try again." }, { status: 502 });
-    }
-
-    const rawResponse: unknown = await response.json();
-    const parsedResponse = openAiResponseSchema.safeParse(rawResponse);
-    const content = parsedResponse.success ? parsedResponse.data.choices[0]?.message.content : null;
-    if (!content) {
-      return Response.json({ error: "The assistant returned an empty draft. Please revise your description." }, { status: 502 });
-    }
-
-    let rawDraft: unknown;
-    try {
-      rawDraft = JSON.parse(content);
-    } catch {
-      return Response.json({ error: "The assistant returned an unreadable draft. Please try again." }, { status: 502 });
-    }
-
-    const parsedDraft = agreementDraftSchema.safeParse(rawDraft);
-    if (!parsedDraft.success) {
-      return Response.json(
-        { error: "The milestones did not match the total. Clarify the amounts and try again." },
-        { status: 422 },
+      console.error("Gemini request failed", response.status, (await response.text()).slice(0, 300));
+      return NextResponse.json(
+        {
+          error:
+            response.status === 429
+              ? "The free daily limit was reached. Try again later, or fill in the form by hand."
+              : "The description service is temporarily unavailable.",
+        },
+        { status: 502 },
       );
     }
-
-    return Response.json({ draft: parsedDraft.data });
-  } catch {
-    return Response.json({ error: "The description service is temporarily unavailable." }, { status: 502 });
+    reply = await response.json();
+  } catch (error) {
+    console.error("Gemini request error", error);
+    return NextResponse.json({ error: "The description service is temporarily unavailable." }, { status: 502 });
   }
+
+  const text = (reply as { candidates?: { content?: { parts?: { text?: string }[] } }[] })
+    .candidates?.[0]?.content?.parts?.map((part) => part.text ?? "")
+    .join("")
+    .replace(/^\s*```(?:json)?/i, "")
+    .replace(/```\s*$/, "")
+    .trim();
+
+  let candidate: unknown;
+  try {
+    candidate = JSON.parse(text ?? "");
+  } catch {
+    return NextResponse.json({ error: "The assistant could not understand that. Try rephrasing, or fill in the form by hand." }, { status: 422 });
+  }
+
+  const refusal = (candidate as { error?: unknown } | null)?.error;
+  if (typeof refusal === "string") return NextResponse.json({ error: refusal }, { status: 422 });
+
+  const draft = agreementDraftSchema.safeParse(candidate);
+  if (!draft.success) {
+    return NextResponse.json({ error: "The assistant returned an invalid draft. Please try again." }, { status: 422 });
+  }
+  const total = draft.data.milestones.reduce((sum, milestone) => sum + milestone.amount, 0);
+  if (total !== draft.data.amount) {
+    return NextResponse.json(
+      { error: "The amounts did not add up to the total. Try rephrasing, or fill in the form by hand." },
+      { status: 422 },
+    );
+  }
+  return NextResponse.json({ draft: draft.data });
 }

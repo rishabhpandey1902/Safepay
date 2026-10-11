@@ -29,6 +29,6 @@ export async function POST(request: Request) {
   }
 
   return NextResponse.json(
-    issueChallenge({ action: body.data.action, address: body.data.address, payload: payload.data }),
+    await issueChallenge({ action: body.data.action, address: body.data.address, payload: payload.data }),
   );
 }

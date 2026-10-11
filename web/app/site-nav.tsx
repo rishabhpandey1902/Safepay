@@ -5,12 +5,18 @@ import { useState } from "react";
 
 import { RoleSignInLink } from "@/lib/wallet/role-sign-in-link";
 import { useWalletSession } from "@/lib/wallet/session";
+import { NotificationBell } from "./notification-bell";
+
 
 const links = [
   { href: "/create", label: "Create SafePay" },
   { href: "/services", label: "Find freelancer" },
   { href: "/projects", label: "Find work" },
   { href: "/dashboard", label: "My agreements" },
+  { href: "/activity", label: "Activity" },
+  { href: "/keeper", label: "Keeper" },
+  { href: "/history", label: "Wallet history" },
+  { href: "/messages", label: "Messages" },
 ];
 
 function shortAddress(address?: string) {
@@ -42,6 +48,7 @@ function AuthControls({ onNavigate }: { onNavigate?: () => void }) {
 
   return (
     <div className="flex items-center gap-3">
+      <NotificationBell />
       <span className="text-xs text-slate-400">{shortAddress(address)}</span>
       <button
         type="button"
@@ -58,6 +65,11 @@ function AuthControls({ onNavigate }: { onNavigate?: () => void }) {
 }
 
 export function SiteNav() {
+  const { address } = useWalletSession();
+  const resolver = process.env.NEXT_PUBLIC_SAFE_PAY_RESOLVER_ADDRESS?.toLowerCase();
+  const isResolver = Boolean(address && resolver && address.toLowerCase() === resolver);
+  const navLinks = isResolver ? [...links, { href: "/resolver", label: "Resolve disputes" }] : links;
+
   const [open, setOpen] = useState(false);
 
   return (
@@ -68,7 +80,7 @@ export function SiteNav() {
         </Link>
 
         <ul className="hidden items-center gap-6 md:flex">
-          {links.map((link) => (
+          {navLinks.map((link) => (
             <li key={link.href}>
               <Link href={link.href} className="text-sm text-slate-300 transition hover:text-white">
                 {link.label}
@@ -95,7 +107,7 @@ export function SiteNav() {
       {open ? (
         <div className="border-t border-slate-800 px-4 pb-4 md:hidden">
           <ul>
-            {links.map((link) => (
+            {navLinks.map((link) => (
               <li key={link.href}>
                 <Link
                   href={link.href}

@@ -79,13 +79,11 @@ const formSchema = z
     totalAmount: z.coerce.number().int("Use whole token amounts").positive("Total amount must be greater than zero."),
     approvalWindow: z.coerce
       .number()
-      .int("Use whole days")
-      .min(1, "Approval window needs at least 1 day.")
+      .min(0.003, "Approval window must be at least about 5 minutes.")
       .max(365, "Approval window must be 365 days or less."),
     disputeWindow: z.coerce
       .number()
-      .int("Use whole days")
-      .min(1, "Dispute window needs at least 1 day.")
+      .min(0.002, "Dispute window must be at least about 3 minutes.")
       .max(365, "Dispute window must be 365 days or less."),
     clientCancellationFee: z.coerce
       .number()
@@ -154,26 +152,46 @@ export default function CreateAgreementPage() {
   const [createdAgreementId, setCreatedAgreementId] = useState<number | null>(null);
   const [fundingPending, setFundingPending] = useState(false);
   const [marketplacePrefill, setMarketplacePrefill] = useState(false);
+    const [hourlyNote, setHourlyNote] = useState<string | null>(null);
 
-  useEffect(() => {
+   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const provider = params.get("provider");
     const title = params.get("title");
     const listingTitle = params.get("listing");
     if (!provider || !title || !listingTitle || !isAddress(provider)) return;
 
-    // Prefilling the draft synchronizes form state with the navigation URL.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    const hours = Number(params.get("hours"));
+    const rate = Number(params.get("rate"));
+    const hasHours = Number.isFinite(hours) && hours >= 1 && Number.isFinite(rate) && rate > 0;
+    const total = hasHours ? Math.max(1, Math.round(hours * rate)) : 0;
+    const requested = Math.max(1, Math.min(5, Math.floor(Number(params.get("parts")) || 1)));
+    const count = hasHours ? Math.min(requested, total) : 1;
+    const base = Math.floor(total / count);
+    const hoursEach = hasHours ? Number((hours / count).toFixed(1)) : 0;
+    const prefilled = hasHours
+      ? Array.from({ length: count }, (_, index) => ({
+          description:
+            count === 1
+              ? `Complete ${hours} hours of work: ${listingTitle}`
+              : `Part ${index + 1} of ${count}: ${hoursEach} hours of work`,
+          amount: index === count - 1 ? total - base * (count - 1) : base,
+        }))
+      : [{ description: `Deliver the service: ${listingTitle}`, amount: 0 }];
+
+    /* eslint-disable react-hooks/set-state-in-effect */
     setForm((current) => ({
       ...current,
-      contractorName: listingTitle,
+      contractorName: params.get("name") ?? listingTitle,
       contractorAddress: provider,
       projectTitle: title,
-      totalAmount: 0,
+      totalAmount: total,
       clientCancellationFee: 0,
-      milestones: [{ description: `Deliver the service: ${listingTitle}`, amount: 0 }],
+      milestones: prefilled,
     }));
+    setHourlyNote(hasHours ? `${hours} hours × $${rate} per hour = $${total}, split into ${count} ${count === 1 ? "payment" : "payments"}.` : null);
     setMarketplacePrefill(true);
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
 
   const totalMilestoneAmount = useMemo(
@@ -335,9 +353,8 @@ export default function CreateAgreementPage() {
       String(parsed.data.clientCancellationFee),
       tokenMetadata.decimals,
     );
-    const approvalWindow = BigInt(parsed.data.approvalWindow * 24 * 60 * 60);
-    const disputeWindow = BigInt(parsed.data.disputeWindow * 24 * 60 * 60);
-
+    const approvalWindow = BigInt(Math.round(parsed.data.approvalWindow * 24 * 60 * 60));
+    const disputeWindow = BigInt(Math.round(parsed.data.disputeWindow * 24 * 60 * 60));
     // Create the draft only. Nothing is locked until the contractor accepts and the client funds it.
     const createHash = await walletClient.writeContract({
       address: contractAddress,
@@ -386,7 +403,12 @@ export default function CreateAgreementPage() {
     } catch {
       // The agreement exists on chain. The agreement page warns if the descriptions are missing.
     }
-
+        void fetch("/api/notify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agreementId, txHash: createHash }),
+    }).catch(() => undefined);
+    
     return agreementId;
   };
 
@@ -449,17 +471,7 @@ export default function CreateAgreementPage() {
     );
   }
 
-  if (role !== "client") {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-slate-950 px-6 py-10 text-slate-100">
-        <section className="max-w-lg rounded-3xl border border-slate-800 bg-slate-900 p-8">
-          <h1 className="text-2xl font-semibold">Client wallet required</h1>
-          <p className="mt-3 text-slate-300">Agreement creation uses the Hire role and Privy. Log out before changing your role.</p>
-          <button type="button" onClick={() => void logout()} className="mt-5 rounded-xl bg-violet-600 px-4 py-3 font-semibold">Log out and choose Hire</button>
-        </section>
-      </main>
-    );
-  }
+
 
   return (
     <main className="min-h-screen bg-slate-950 px-6 py-10 text-slate-50">
@@ -509,7 +521,9 @@ export default function CreateAgreementPage() {
             </div>
             {marketplacePrefill ? (
               <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100">
-                Marketplace listing prefilled this draft. Its USD starting price is indicative only. Set the exact stablecoin-denominated total and milestone amounts; display-currency conversion does not change the on-chain values. Review and confirm before creating anything.
+                {hourlyNote
+                  ? `Prefilled from the freelancer's hourly rate: ${hourlyNote} Amounts are in the payment token and assume it is worth about $1. You can edit everything before creating.`
+                  : "Prefilled from a freelancer profile. Set the exact total and milestone amounts. Review and confirm before creating anything."}
               </div>
             ) : null}
             <section className="mb-7 border-l-2 border-teal-500 bg-slate-950/70 p-4 sm:p-5">
@@ -835,7 +849,6 @@ export default function CreateAgreementPage() {
               <p className="mt-1 text-sm text-slate-400">{chainName} {chainId ? `(chain ${chainId})` : "(switching…)"}</p>
               {walletError ? <p role="alert" className="mt-2 text-sm text-red-300">{walletError}</p> : null}
             </div>
-            {role === "client" ? <WalletProtectionPanel /> : null}
           </aside>
         </div>
       </div>

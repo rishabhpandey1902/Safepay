@@ -11,7 +11,9 @@ import {
 
 import { safePayEscrowAbi } from "@/lib/contracts";
 import { monadTestnet } from "@/lib/monad";
-import { createPrivyServerClient, verifyPrivyRequest } from "@/lib/privy-server";
+import { createPrivyServerClient } from "@/lib/privy-server";
+import { saveKeeperRelease } from "@/lib/safepay-store";
+import { notifyMany } from "@/lib/notify";
 
 export const runtime = "nodejs";
 
@@ -26,14 +28,17 @@ const rpcUrl =
   "https://testnet-rpc.monad.xyz";
 const publicClient = createPublicClient({ chain: monadTestnet, transport: http(rpcUrl) });
 
+// Stops two requests from sending the same release at the same time.
+const inFlight = new Set<string>();
+
 export async function POST(request: Request) {
-  const privyAppId = process.env.PRIVY_APP_ID ?? process.env.NEXT_PUBLIC_PRIVY_APP_ID;
   const relayerWalletId = process.env.PRIVY_TIMEOUT_RELAYER_WALLET_ID;
   const escrowAddress = process.env.NEXT_PUBLIC_SAFE_PAY_ESCROW_ADDRESS;
   const tokenAddress = process.env.NEXT_PUBLIC_SAFE_PAY_TOKEN_ADDRESS;
+  const privyAppId = process.env.PRIVY_APP_ID ?? process.env.NEXT_PUBLIC_PRIVY_APP_ID;
   if (!privyAppId || !process.env.PRIVY_APP_SECRET || !relayerWalletId) {
     return NextResponse.json(
-      { error: "Configure the Privy server app credentials and a dedicated timeout relayer wallet before enabling timeout releases." },
+      { error: "The SafePay keeper is not configured. Set the Privy app credentials and the keeper wallet ID." },
       { status: 503 },
     );
   }
@@ -41,44 +46,34 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Configure valid SafePay escrow and settlement token addresses." }, { status: 503 });
   }
 
-  const privy = createPrivyServerClient();
-  const claims = await verifyPrivyRequest(request, privy);
-  if (!claims) return NextResponse.json({ error: "A valid Privy access token is required." }, { status: 401 });
-
-  const rawBody: unknown = await request.json().catch(() => null);
-  const parsed = requestSchema.safeParse(rawBody);
+  const parsed = requestSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {
-    return NextResponse.json({ error: "Invalid timeout release request.", details: parsed.error.flatten() }, { status: 400 });
+    return NextResponse.json({ error: "Invalid release request." }, { status: 400 });
   }
 
+  const key = `${parsed.data.agreementId}:${parsed.data.milestoneIndex}`;
+  if (inFlight.has(key)) {
+    return NextResponse.json({ error: "A release for this milestone is already in progress." }, { status: 409 });
+  }
+  inFlight.add(key);
+
   try {
-    if (await publicClient.getChainId() !== 10143) {
+    const privy = createPrivyServerClient();
+
+    if ((await publicClient.getChainId()) !== 10143) {
       return NextResponse.json({ error: "The configured RPC is not connected to Monad Testnet (chain ID 10143)." }, { status: 503 });
     }
-    const [escrowCode, tokenCode, relayer] = await Promise.all([
-      publicClient.getBytecode({ address: escrowAddress }),
-      publicClient.getBytecode({ address: tokenAddress }),
-      privy.wallets().get(relayerWalletId),
-    ]);
-    if (!escrowCode || escrowCode === "0x" || !tokenCode || tokenCode === "0x") {
-      return NextResponse.json({ error: "The configured escrow or settlement token has no deployed code." }, { status: 503 });
-    }
+    const relayer = await privy.wallets().get(relayerWalletId);
     if (relayer.chain_type !== "ethereum" || relayer.owner_id !== null) {
       return NextResponse.json(
-        { error: "The timeout relayer must be a Privy-managed Ethereum wallet without a user owner." },
+        { error: "The keeper must be a Privy-managed Ethereum wallet without a user owner." },
         { status: 503 },
       );
     }
 
     const address = escrowAddress as Address;
     const token = tokenAddress as Address;
-    const [supported, agreement, milestone, block] = await Promise.all([
-      publicClient.readContract({
-        address,
-        abi: safePayEscrowAbi,
-        functionName: "supportedTokens",
-        args: [token],
-      }),
+    const [agreement, milestone, block] = await Promise.all([
       publicClient.readContract({
         address,
         abi: safePayEscrowAbi,
@@ -93,18 +88,18 @@ export async function POST(request: Request) {
       }),
       publicClient.getBlock(),
     ]);
-    if (!supported) {
-      return NextResponse.json({ error: "The configured settlement token is not supported by this escrow." }, { status: 409 });
-    }
     if (agreement.token.toLowerCase() !== token.toLowerCase()) {
       return NextResponse.json({ error: "The agreement uses a different settlement token." }, { status: 409 });
     }
     if (Number(agreement.status) !== 1 || Number(milestone.status) !== 1) {
-      return NextResponse.json({ error: "Only active agreements with submitted, unreleased milestones can use timeout release." }, { status: 409 });
+      return NextResponse.json(
+        { error: "Only active agreements with a submitted, unreleased milestone can be released by timeout." },
+        { status: 409 },
+      );
     }
     if (milestone.approvalDeadline > block.timestamp) {
       return NextResponse.json(
-        { error: "The milestone approval window has not elapsed.", approvalDeadline: milestone.approvalDeadline.toString() },
+        { error: "The approval window has not ended yet.", approvalDeadline: milestone.approvalDeadline.toString() },
         { status: 409 },
       );
     }
@@ -128,13 +123,36 @@ export async function POST(request: Request) {
     if (!isHash(sent.hash)) throw new Error("Privy returned an invalid transaction hash.");
     const receipt = await publicClient.waitForTransactionReceipt({ hash: sent.hash });
     if (receipt.status !== "success") {
-      return NextResponse.json({ error: "Privy submitted the timeout release, but the transaction reverted.", transactionHash: sent.hash }, { status: 502 });
+      return NextResponse.json(
+        { error: "The keeper sent the release, but the transaction reverted.", transactionHash: sent.hash },
+        { status: 502 },
+      );
     }
+
+    await saveKeeperRelease({
+      contractAddress: address,
+      agreementId: parsed.data.agreementId,
+      milestoneIndex: parsed.data.milestoneIndex,
+      txHash: sent.hash,
+    }).catch(() => undefined);
+
+        await notifyMany(
+      [agreement.contractor, agreement.client].map((person) => ({
+        address: person,
+        type: "agreement",
+        title: `Milestone ${parsed.data.milestoneIndex + 1} released`,
+        body: "The approval window ended, so the SafePay keeper released the payment.",
+        link: `/agreement/${parsed.data.agreementId}`,
+      })),
+    );
+
     return NextResponse.json({ transactionHash: sent.hash, status: receipt.status });
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Unable to execute the permissionless timeout release." },
+      { error: error instanceof Error ? error.message : "Unable to run the keeper release." },
       { status: 502 },
     );
+  } finally {
+    inFlight.delete(key);
   }
 }

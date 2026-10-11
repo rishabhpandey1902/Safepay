@@ -18,7 +18,7 @@ export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
   const clean = (key: string) => params.get(key)?.trim().slice(0, 100) || undefined;
   return NextResponse.json({
-    projects: listProjects({ search: clean("search"), category: clean("category"), country: clean("country") }),
+    projects: await listProjects({ search: clean("search"), category: clean("category"), country: clean("country") }),
   });
 }
 
@@ -39,5 +39,5 @@ export async function POST(request: Request) {
   });
   if (!valid) return NextResponse.json({ error: "The signature could not be verified." }, { status: 401 });
 
-  return NextResponse.json({ project: createProject(payload.data, body.data.address) });
+  return NextResponse.json({ project: await createProject(payload.data, body.data.address) });
 }

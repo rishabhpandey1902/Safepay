@@ -6,3 +6,8 @@ node_modules
 out
 cache
 *.tsbuildinfo
+
+data/
+*.sqlite
+*.sqlite-*
+*.db

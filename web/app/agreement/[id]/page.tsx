@@ -1,6 +1,7 @@
 "use client";
 
-import { acceptanceTypedData } from "@/lib/acceptance";
+import { acceptanceTypedData, closureTypedData } from "@/lib/acceptance";
+import { friendlyChainError } from "@/lib/chain-errors";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -11,6 +12,7 @@ import { formatTokenDisplay } from "@/lib/token";
 import { useSafePayWallet } from "@/lib/wallet/useSafePayWallet";
 import { RoleSignInLink } from "@/lib/wallet/role-sign-in-link";
 import { useTokenConfig } from "../../token-provider";
+import { ChatBox } from "@/app/chat-box";
 
 const milestoneStatusLabels: Record<number, string> = {
   0: "Locked",
@@ -82,6 +84,21 @@ const equalsAddress = (left?: string, right?: string) =>
   Boolean(left && right && left.toLowerCase() === right.toLowerCase());
 
 const explorerUrl = (hash: `0x${string}`) => `https://testnet.monadexplorer.com/tx/${hash}`;
+function parseEvidence(value: string): { note: string; link: string } | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as { n?: unknown; l?: unknown };
+    if (typeof parsed === "object" && parsed !== null) {
+      return {
+        note: typeof parsed.n === "string" ? parsed.n : "",
+        link: typeof parsed.l === "string" && /^https?:\/\//i.test(parsed.l) ? parsed.l : "",
+      };
+    }
+  } catch {
+    // Older submissions stored a plain link.
+  }
+  return /^https?:\/\//i.test(value) ? { note: "", link: value } : { note: value, link: "" };
+}
 
 export default function AgreementPage() {
   const params = useParams<{ id: string }>();
@@ -101,6 +118,7 @@ export default function AgreementPage() {
   const [details, setDetails] = useState<string[] | null>(null);
   const [acceptedAt, setAcceptedAt] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [closure, setClosure] = useState<"declined" | "withdrawn" | null>(null);
 
   const contractAddress = process.env.NEXT_PUBLIC_SAFE_PAY_ESCROW_ADDRESS as Address | undefined;
   const configurationError = !contractAddress || !isAddress(contractAddress) || contractAddress === "0x0000000000000000000000000000000000000000"
@@ -166,25 +184,25 @@ export default function AgreementPage() {
     let active = true;
     const loadOffChain = async () => {
       try {
-        const [detailsResponse, acceptanceResponse] = await Promise.all([
+        const [detailsResponse, acceptanceResponse, closureResponse] = await Promise.all([
           fetch(`/api/agreement-details?id=${agreementId}`, { cache: "no-store" }),
           fetch(`/api/acceptance?ids=${agreementId}`, { cache: "no-store" }),
+          fetch(`/api/agreement-closure?ids=${agreementId}`, { cache: "no-store" }),
         ]);
         const detailsBody = (await detailsResponse.json()) as { descriptions?: string[] };
         const acceptanceBody = (await acceptanceResponse.json()) as {
           accepted?: Record<string, { createdAt: string }>;
         };
+        const closureBody = (await closureResponse.json()) as { closed?: Record<string, "declined" | "withdrawn"> };
         if (!active) return;
-        setDetails(
-          detailsResponse.ok && Array.isArray(detailsBody.descriptions) ? detailsBody.descriptions : null,
-        );
-        setAcceptedAt(
-          acceptanceResponse.ok ? acceptanceBody.accepted?.[String(agreementId)]?.createdAt ?? null : null,
-        );
+        setDetails(detailsResponse.ok && Array.isArray(detailsBody.descriptions) ? detailsBody.descriptions : null);
+        setAcceptedAt(acceptanceResponse.ok ? acceptanceBody.accepted?.[String(agreementId)]?.createdAt ?? null : null);
+        setClosure(closureResponse.ok ? closureBody.closed?.[String(agreementId)] ?? null : null);
       } catch {
         if (active) {
           setDetails(null);
           setAcceptedAt(null);
+          setClosure(null);
         }
       }
     };
@@ -218,6 +236,7 @@ export default function AgreementPage() {
   const canAct = isClient || isContractor;
   const canFund = Boolean(agreement && isClient && agreement.status === 0);
   const canCancel = Boolean(agreement && canAct && agreement.status === 1);
+    const hasOutstanding = milestones.some((item) => Number(item.status) === 1 || Number(item.status) === 3);
   const shareUrl = typeof window !== "undefined" ? `${window.location.origin}/agreement/${agreementId}` : "";
             const shareText = `I created a SafePay agreement for you. Review and accept it here: ${shareUrl}`;
 const toDays = (seconds: bigint) => Number(seconds) / 86_400;
@@ -269,6 +288,47 @@ const toDays = (seconds: bigint) => Number(seconds) / 86_400;
               setBusyAction(null);
           }
         };
+    const handleClose = async (kind: "declined" | "withdrawn") => {
+    if (!agreement || !contractAddress) return;
+    setBusyAction("close");
+    setError(null);
+    try {
+      const signer = await getWalletClient();
+      if (!signer) throw new Error("Your wallet connection is not ready yet.");
+      const typedData = closureTypedData(
+        contractAddress,
+        {
+          agreementId: BigInt(agreementId),
+          client: agreement.client,
+          contractor: agreement.contractor,
+          token: agreement.token,
+          resolver: agreement.resolver,
+          totalAmount: agreement.totalAmount,
+          approvalWindow: agreement.approvalWindow,
+          disputeWindow: agreement.disputeWindow,
+          clientCancellationFee: agreement.clientCancellationFee,
+          milestones: milestones.map((milestone) => ({
+            amount: milestone.amount,
+            descriptionHash: milestone.descriptionHash,
+          })),
+        },
+        kind,
+      );
+      const signature = await signer.signTypedData(typedData);
+      const response = await fetch("/api/agreement-closure", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agreementId, kind, signature }),
+      });
+      const body = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(body.error ?? "Could not close the agreement.");
+      setRefreshTick((current) => current + 1);
+    } catch (closeError) {
+      setError(closeError instanceof Error ? closeError.message : "Could not close the agreement.");
+    } finally {
+      setBusyAction(null);
+    }
+  };      
 
   const getWalletClient = async () => {
     if (!walletClient || !authenticated || !address) return null;
@@ -351,15 +411,20 @@ const toDays = (seconds: bigint) => Number(seconds) / 86_400;
       } else if (action === "submit") {
         if (milestoneIndex === undefined) return;
         const data = submitForm[milestoneIndex] ?? { note: "", link: "" };
-        const note = data.note.trim() || "Milestone submitted";
+        const note = data.note.trim();
         const link = data.link.trim();
-        if (new TextEncoder().encode(link).length > 2048) throw new Error("Evidence links must be 2,048 bytes or fewer.");
-        const evidenceHash = keccak256(toBytes(note));
+        if (!note && !link) throw new Error("Add a note or a link describing what you delivered.");
+        if (link && !/^https?:\/\//i.test(link)) throw new Error("Links must start with http:// or https://.");
+        const packed = JSON.stringify({ n: note, l: link });
+        if (new TextEncoder().encode(packed).length > 2000) {
+          throw new Error("The note and link are too long. Shorten them, and share details in chat.");
+        }
+        const evidenceHash = keccak256(toBytes(packed));
         hash = (await walletClient.writeContract({
           address: contractAddress,
           abi: safePayEscrowAbi,
           functionName: "submitMilestone",
-          args: [BigInt(agreementId), BigInt(milestoneIndex), evidenceHash, link],
+          args: [BigInt(agreementId), BigInt(milestoneIndex), evidenceHash, packed],
         })) as `0x${string}`;
       } else if (action === "dispute") {
         if (milestoneIndex === undefined) return;
@@ -393,39 +458,41 @@ const toDays = (seconds: bigint) => Number(seconds) / 86_400;
 
       addTxLog(action, hash);
       if (!(await updateTxLog(hash))) throw new Error("The transaction failed or could not be confirmed. Check its status below.");
+            void fetch("/api/notify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agreementId, txHash: hash }),
+      }).catch(() => undefined);
+            if (action === "cancel") {
+        await fetch("/api/cancellation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ agreementId, txHash: hash }),
+        }).catch(() => undefined);
+      }
       setRefreshTick((current) => current + 1);
     } catch (actionError) {
-      setError(actionError instanceof Error ? actionError.message : "The transaction could not be completed.");
-    } finally {
+      setError(actionError instanceof Error ? friendlyChainError(actionError.message) : "The transaction could not be completed.");    } finally {
       setBusyAction(null);
     }
   };
 
-  const handleTimeoutRelease = async (milestoneIndex: number) => {
-    if (provider !== "privy" || !getAuthToken) {
-      setError("Sign in as a client with Privy to request a timeout release.");
-      return;
-    }
+    const handleTimeoutRelease = async (milestoneIndex: number) => {
     setBusyAction(`timeout-${milestoneIndex}`);
     setError(null);
     try {
-      const accessToken = await getAuthToken();
-      if (!accessToken) throw new Error("Privy did not provide an access token.");
       const response = await fetch("/api/timeout-release", {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ agreementId, milestoneIndex }),
       });
       const result: unknown = await response.json();
       const parsedResult = result as { error?: string; transactionHash?: string };
-      if (!response.ok) throw new Error(parsedResult.error ?? "The timeout release request failed.");
+      if (!response.ok) throw new Error(parsedResult.error ?? "The keeper release request failed.");
       if (!parsedResult.transactionHash || !isHash(parsedResult.transactionHash)) {
-        throw new Error("The timeout service returned an invalid transaction hash.");
+        throw new Error("The keeper returned an invalid transaction hash.");
       }
-      addTxLog("Permissionless timeout release", parsedResult.transactionHash);
+      addTxLog("Released by SafePay keeper", parsedResult.transactionHash);
       setTxLogs((current) =>
         current.map((row) =>
           row.hash === parsedResult.transactionHash ? { ...row, status: "confirmed" } : row,
@@ -433,7 +500,7 @@ const toDays = (seconds: bigint) => Number(seconds) / 86_400;
       );
       setRefreshTick((current) => current + 1);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "The timeout release request failed.");
+      setError(cause instanceof Error ? cause.message : "The keeper release request failed.");
     } finally {
       setBusyAction(null);
     }
@@ -490,7 +557,36 @@ const toDays = (seconds: bigint) => Number(seconds) / 86_400;
           <div className="rounded-3xl border border-slate-800 bg-slate-900 p-8 text-slate-200">Loading agreement details…</div>
         ) : agreement ? (
           <>
-            {isClient && agreement.status === 0 ? (
+                      {agreement.status === 0 && closure ? (
+              <section className="mb-6 border border-slate-700 bg-slate-900 p-4">
+                <h2 className="font-semibold text-white">
+                  {closure === "declined" ? "The contractor declined this agreement" : "The client withdrew this agreement"}
+                </h2>
+                <p className="mt-1 text-sm text-slate-300">
+                  It was never funded, so no money moved. Create a new agreement to try again.
+                </p>
+              </section>
+            ) : null}
+
+            {agreement.status === 0 && !closure && (isClient || (isContractor && !acceptedAt)) ? (
+              <section className="mb-6 flex flex-wrap items-center justify-between gap-3 border border-slate-800 bg-slate-900 p-4">
+                <p className="text-sm text-slate-300">
+                  {isClient
+                    ? "Changed your mind? Withdraw this agreement before it is funded. Nothing is locked yet."
+                    : "Not interested? Decline this agreement. Nothing is locked yet."}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void handleClose(isClient ? "withdrawn" : "declined")}
+                  disabled={busyAction !== null}
+                  className="border border-red-500/40 bg-red-500/10 px-4 py-2 text-sm font-semibold text-red-200 hover:bg-red-500/20 disabled:opacity-60"
+                >
+                  {busyAction === "close" ? "Waiting for your signature…" : isClient ? "Withdraw agreement" : "Decline agreement"}
+                </button>
+              </section>
+            ) : null}
+            
+            {isClient && agreement.status === 0 && !closure ? (
               <section className="mb-6 space-y-4 border border-amber-500/30 bg-amber-950/20 p-4">
                 <div>
                   <h2 className="font-semibold text-white">
@@ -553,7 +649,7 @@ const toDays = (seconds: bigint) => Number(seconds) / 86_400;
               </section>
             ) : null}
 
-            {isContractor && agreement.status === 0 ? (
+            {isContractor && agreement.status === 0 && !closure ? (
               <section className="mb-6 space-y-4 border border-teal-500/30 bg-teal-950/20 p-4">
                 {acceptedAt ? (
                   <div>
@@ -601,7 +697,18 @@ const toDays = (seconds: bigint) => Number(seconds) / 86_400;
                 )}
               </section>
             ) : null}
-
+                       {agreement.status === 3 ? (
+              <section className="mb-6 border border-emerald-500/40 bg-emerald-500/10 p-4">
+                <h2 className="font-semibold text-emerald-200">Completed</h2>
+                <p className="mt-1 text-sm text-emerald-100">All milestones are settled. This agreement is finished for both sides.</p>
+              </section>
+            ) : null}
+            {agreement.status === 2 ? (
+              <section className="mb-6 border border-slate-600 bg-slate-900 p-4">
+                <h2 className="font-semibold text-slate-100">Cancelled</h2>
+                <p className="mt-1 text-sm text-slate-300">This agreement was cancelled. See Wallet history for the amounts.</p>
+              </section>
+            ) : null}
             <section className="mb-8 grid gap-5 md:grid-cols-3">
               <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
                 <p className="text-xs uppercase tracking-[0.2em] text-slate-400">Client</p>
@@ -633,6 +740,7 @@ const toDays = (seconds: bigint) => Number(seconds) / 86_400;
                     {milestones.map((milestone, index) => {
                       const statusNumber = Number(milestone.status);
                       const statusText = milestoneStatusLabels[statusNumber] ?? "Locked";
+                                            const evidence = statusNumber >= 1 ? parseEvidence(milestone.evidenceURI) : null;
                       const canSubmit = isContractor && statusNumber === 0 && agreement.status === 1;
                       const submitted = statusNumber === 1 && agreement.status === 1;
                       const canApprove = isClient && submitted && chainTimestamp !== null && chainTimestamp < milestone.approvalDeadline;
@@ -644,6 +752,29 @@ const toDays = (seconds: bigint) => Number(seconds) / 86_400;
                           <td className="px-4 py-4 text-slate-200">#{index + 1}</td>
                           <td className="px-4 py-4 text-slate-200">
                             <div className="max-w-md break-words">{details?.[index] || milestone.descriptionURI || "No note on file"}</div>
+                                                        {evidence && (evidence.note || evidence.link) ? (
+                              <div className="mt-2 max-w-md rounded-lg border border-teal-500/30 bg-teal-950/20 p-3 text-xs">
+                                <p className="font-semibold text-teal-200">Delivered by the contractor</p>
+                                {evidence.note ? (
+                                  <p className="mt-1 whitespace-pre-line break-words text-slate-200">{evidence.note}</p>
+                                ) : null}
+                                {evidence.link ? (
+                                  <a
+                                    href={evidence.link}
+                                    target="_blank"
+                                    rel="noreferrer noopener"
+                                    className="mt-1 inline-block break-all text-violet-300 hover:text-violet-200"
+                                  >
+                                    Open delivered files
+                                  </a>
+                                ) : null}
+                                {milestone.submittedAt > BigInt(0) ? (
+                                  <p className="mt-1 text-slate-500">
+                                    Submitted {new Date(Number(milestone.submittedAt) * 1000).toLocaleString()}
+                                  </p>
+                                ) : null}
+                              </div>
+                            ) : null}
                           </td>
                           <td className="px-4 py-4 text-slate-200">
                             {formatAmount(milestone.amount)}
@@ -714,14 +845,14 @@ const toDays = (seconds: bigint) => Number(seconds) / 86_400;
                                   {busyAction === "release" ? "Releasing…" : "Release to contractor"}
                                 </button>
                               ) : null}
-                              {canRelease && provider === "privy" ? (
+                              {canRelease ? (
                                 <button
                                   type="button"
                                   onClick={() => void handleTimeoutRelease(index)}
                                   disabled={busyAction !== null}
                                   className="inline-flex items-center justify-center rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm font-semibold text-emerald-200 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
-                                  {busyAction === `timeout-${index}` ? "Requesting timeout release…" : "Request server timeout release"}
+                                  {busyAction === `timeout-${index}` ? "Requesting timeout release…" : "Release with SafePay keeper"}
                                 </button>
                               ) : null}
 
@@ -792,8 +923,11 @@ const toDays = (seconds: bigint) => Number(seconds) / 86_400;
                 <p className="text-sm text-slate-300">Cancellation is blocked while any milestone awaits review or dispute resolution.</p>
                 <button
                   type="button"
-                  onClick={() => void handleAction("cancel")}
-                  disabled={busyAction !== null}
+                  onClick={() =>
+                    hasOutstanding
+                      ? setError("A milestone is waiting for review or in dispute. Approve it, let it release, or resolve the dispute first, then cancel.")
+                      : void handleAction("cancel")
+                  }                  disabled={busyAction !== null}
                   className="w-full border border-red-500/40 bg-red-500/10 px-4 py-2.5 text-sm font-semibold text-red-200 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
                 >
                   {busyAction === "cancel" ? "Cancelling agreement…" : "Cancel agreement"}
@@ -801,7 +935,20 @@ const toDays = (seconds: bigint) => Number(seconds) / 86_400;
               </section>
             ) : null}
 
-            
+                        {canAct ? (
+              <section id="chat" className="mt-8 rounded-3xl border border-slate-800 bg-slate-900 p-5">
+                <h2 className="text-lg font-semibold text-white">
+                  Chat with the {isClient ? "contractor" : "client"}
+                </h2>
+                <p className="mt-1 text-sm text-slate-400">
+                  Share project details and files here. Only the two of you can read this.
+                </p>
+                <div className="mt-4">
+                  <ChatBox thread={`agreement:${agreementId}`} />
+                </div>
+              </section>
+            ) : null}
+
 
             {txLogs.length > 0 ? (
               <section className="mt-8 rounded-3xl border border-slate-800 bg-slate-900 p-5">

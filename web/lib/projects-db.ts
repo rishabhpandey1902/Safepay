@@ -2,46 +2,13 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 
-import { currentIsoTimestamp, listingDatabase as db } from "./services-db";
+import { dbAll, dbGet, dbRun } from "./db";
 import type {
   ApplicationInput,
   Project,
   ProjectApplication,
   ProjectInput,
 } from "./projects-schema";
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS projects (
-    id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    description TEXT NOT NULL,
-    category TEXT NOT NULL,
-    country TEXT NOT NULL,
-    budget_usd REAL NOT NULL,
-    deadline_days INTEGER NOT NULL,
-    owner_address TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'open',
-    is_demo INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS project_applications (
-    id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL,
-    applicant_address TEXT NOT NULL,
-    message TEXT NOT NULL,
-    proposed_price_usd REAL NOT NULL,
-    delivery_days INTEGER NOT NULL,
-    created_at TEXT NOT NULL,
-    UNIQUE (project_id, applicant_address)
-  );
-  CREATE TABLE IF NOT EXISTS project_nonces (
-    nonce TEXT PRIMARY KEY,
-    address TEXT NOT NULL,
-    action TEXT NOT NULL,
-    payload_hash TEXT NOT NULL,
-    expires_at INTEGER NOT NULL
-  );
-`);
 
 type ProjectRow = {
   id: string;
@@ -95,30 +62,38 @@ const demoProjects: ProjectInput[] = [
   },
 ];
 
-const seed = db.transaction(() => {
-  const existing = db.prepare("SELECT COUNT(*) AS count FROM projects WHERE is_demo = 1").get() as { count: number };
-  if (existing.count > 0) return;
-  const insert = db.prepare(
-    `INSERT INTO projects
-     (id, title, description, category, country, budget_usd, deadline_days, owner_address, status, is_demo, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', 1, ?)`,
-  );
-  const timestamp = currentIsoTimestamp();
-  demoProjects.forEach((project, index) => {
-    insert.run(
-      `00000000-0000-4000-8000-00000000000${index + 1}`,
-      project.title,
-      `${project.description} DEMO PROJECT: sample content only.`,
-      project.category,
-      project.country,
-      project.budgetUsd,
-      project.deadlineDays,
-      `0x200000000000000000000000000000000000000${index + 1}`,
-      timestamp,
-    );
-  });
-});
-seed();
+let seeded: Promise<void> | undefined;
+
+function ensureSeed(): Promise<void> {
+  if (!seeded) {
+    seeded = (async () => {
+      const timestamp = new Date().toISOString();
+      for (let index = 0; index < demoProjects.length; index += 1) {
+        const project = demoProjects[index];
+        await dbRun(
+          `INSERT OR IGNORE INTO projects
+           (id, title, description, category, country, budget_usd, deadline_days, owner_address, status, is_demo, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', 1, ?)`,
+          [
+            `00000000-0000-4000-8000-00000000000${index + 1}`,
+            project.title,
+            `${project.description} DEMO PROJECT: sample content only.`,
+            project.category,
+            project.country,
+            project.budgetUsd,
+            project.deadlineDays,
+            `0x2${"0".repeat(38)}${index + 1}`,
+            timestamp,
+          ],
+        );
+      }
+    })().catch((error: unknown) => {
+      seeded = undefined;
+      throw error;
+    });
+  }
+  return seeded;
+}
 
 const projectSelect = `
   SELECT p.*, (SELECT COUNT(*) FROM project_applications a WHERE a.project_id = p.id) AS application_count
@@ -132,13 +107,13 @@ function toProject(row: ProjectRow): Project {
     description: row.description,
     category: row.category as Project["category"],
     country: row.country,
-    budgetUsd: row.budget_usd,
-    deadlineDays: row.deadline_days,
+    budgetUsd: Number(row.budget_usd),
+    deadlineDays: Number(row.deadline_days),
     ownerAddress: row.owner_address,
     status: row.status === "closed" ? "closed" : "open",
-    isDemo: row.is_demo === 1,
+    isDemo: Number(row.is_demo) === 1,
     createdAt: row.created_at,
-    applicationCount: row.application_count,
+    applicationCount: Number(row.application_count),
   };
 }
 
@@ -148,13 +123,18 @@ function toApplication(row: ApplicationRow): ProjectApplication {
     projectId: row.project_id,
     applicantAddress: row.applicant_address,
     message: row.message,
-    proposedPriceUsd: row.proposed_price_usd,
-    deliveryDays: row.delivery_days,
+    proposedPriceUsd: Number(row.proposed_price_usd),
+    deliveryDays: Number(row.delivery_days),
     createdAt: row.created_at,
   };
 }
 
-export function listProjects(filters: { search?: string; category?: string; country?: string }): Project[] {
+export async function listProjects(filters: {
+  search?: string;
+  category?: string;
+  country?: string;
+}): Promise<Project[]> {
+  await ensureSeed();
   const clauses: string[] = [];
   const values: string[] = [];
   if (filters.search) {
@@ -170,49 +150,56 @@ export function listProjects(filters: { search?: string; category?: string; coun
     values.push(filters.country);
   }
   const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
-  const rows = db
-    .prepare(`${projectSelect} ${where} ORDER BY p.is_demo ASC, p.created_at DESC LIMIT 100`)
-    .all(...values) as ProjectRow[];
+  const rows = await dbAll<ProjectRow>(
+    `${projectSelect} ${where} ORDER BY p.is_demo ASC, p.created_at DESC LIMIT 100`,
+    values,
+  );
   return rows.map(toProject);
 }
 
-export function getProject(id: string): Project | undefined {
-  const row = db.prepare(`${projectSelect} WHERE p.id = ?`).get(id) as ProjectRow | undefined;
+export async function getProject(id: string): Promise<Project | undefined> {
+  await ensureSeed();
+  const row = await dbGet<ProjectRow>(`${projectSelect} WHERE p.id = ?`, [id]);
   return row ? toProject(row) : undefined;
 }
 
-export function listApplications(projectId: string): ProjectApplication[] {
-  const rows = db
-    .prepare("SELECT * FROM project_applications WHERE project_id = ? ORDER BY created_at ASC")
-    .all(projectId) as ApplicationRow[];
+export async function listApplications(projectId: string): Promise<ProjectApplication[]> {
+  const rows = await dbAll<ApplicationRow>(
+    "SELECT * FROM project_applications WHERE project_id = ? ORDER BY created_at ASC",
+    [projectId],
+  );
   return rows.map(toApplication);
 }
 
-export function createProject(input: ProjectInput, ownerAddress: string): Project {
+export async function createProject(input: ProjectInput, ownerAddress: string): Promise<Project> {
+  await ensureSeed();
   const id = randomUUID();
-  db.prepare(
+  await dbRun(
     `INSERT INTO projects
      (id, title, description, category, country, budget_usd, deadline_days, owner_address, status, is_demo, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', 0, ?)`,
-  ).run(
-    id,
-    input.title,
-    input.description,
-    input.category,
-    input.country,
-    input.budgetUsd,
-    input.deadlineDays,
-    ownerAddress.toLowerCase(),
-    currentIsoTimestamp(),
+    [
+      id,
+      input.title,
+      input.description,
+      input.category,
+      input.country,
+      input.budgetUsd,
+      input.deadlineDays,
+      ownerAddress.toLowerCase(),
+      new Date().toISOString(),
+    ],
   );
-  return getProject(id) as Project;
+  const created = await getProject(id);
+  if (!created) throw new Error("The project could not be saved.");
+  return created;
 }
 
-export function createApplication(
+export async function createApplication(
   input: ApplicationInput,
   applicantAddress: string,
-): { ok: true; application: ProjectApplication } | { ok: false; error: string; status: number } {
-  const project = getProject(input.projectId);
+): Promise<{ ok: true; application: ProjectApplication } | { ok: false; error: string; status: number }> {
+  const project = await getProject(input.projectId);
   if (!project) return { ok: false, error: "Project not found.", status: 404 };
   if (project.status !== "open") return { ok: false, error: "This project is closed.", status: 400 };
   if (project.ownerAddress === applicantAddress.toLowerCase()) {
@@ -220,22 +207,24 @@ export function createApplication(
   }
   const id = randomUUID();
   try {
-    db.prepare(
+    await dbRun(
       `INSERT INTO project_applications
        (id, project_id, applicant_address, message, proposed_price_usd, delivery_days, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      id,
-      input.projectId,
-      applicantAddress.toLowerCase(),
-      input.message,
-      input.proposedPriceUsd,
-      input.deliveryDays,
-      currentIsoTimestamp(),
+      [
+        id,
+        input.projectId,
+        applicantAddress.toLowerCase(),
+        input.message,
+        input.proposedPriceUsd,
+        input.deliveryDays,
+        new Date().toISOString(),
+      ],
     );
   } catch {
     return { ok: false, error: "You already applied to this project.", status: 409 };
   }
-  const row = db.prepare("SELECT * FROM project_applications WHERE id = ?").get(id) as ApplicationRow;
+  const row = await dbGet<ApplicationRow>("SELECT * FROM project_applications WHERE id = ?", [id]);
+  if (!row) return { ok: false, error: "Could not save your application.", status: 500 };
   return { ok: true, application: toApplication(row) };
 }

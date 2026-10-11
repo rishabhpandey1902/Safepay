@@ -20,7 +20,7 @@ export async function GET(request: Request) {
   const clean = (key: string) => params.get(key)?.trim().slice(0, 100) || undefined;
   const minExperience = Number(params.get("minExperience"));
   return NextResponse.json({
-    profiles: listProfiles({
+    profiles: await listProfiles({
       search: clean("search"),
       category: clean("category"),
       country: clean("country"),
@@ -46,5 +46,5 @@ export async function POST(request: Request) {
   });
   if (!valid) return NextResponse.json({ error: "The signature could not be verified." }, { status: 401 });
 
-  return NextResponse.json({ profile: saveProfile(payload.data, body.data.address) });
+  return NextResponse.json({ profile: await saveProfile(payload.data, body.data.address) });
 }

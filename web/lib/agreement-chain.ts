@@ -59,3 +59,22 @@ export async function readAgreementTerms(
     })),
   };
 }
+export { client as chainClient };
+
+const partiesCache = new Map<number, { client: string; contractor: string }>();
+
+/** Cheap lookup of who is in an agreement. The result never changes, so it is cached. */
+export async function readAgreementParties(agreementId: number): Promise<{ client: string; contractor: string }> {
+  const cached = partiesCache.get(agreementId);
+  if (cached) return cached;
+  const agreement = await client.readContract({
+    address: getEscrowAddress(),
+    abi: safePayEscrowAbi,
+    functionName: "getAgreement",
+    args: [BigInt(agreementId)],
+  });
+  if (/^0x0+$/.test(agreement.client)) throw new Error("Agreement not found.");
+  const parties = { client: agreement.client.toLowerCase(), contractor: agreement.contractor.toLowerCase() };
+  partiesCache.set(agreementId, parties);
+  return parties;
+}

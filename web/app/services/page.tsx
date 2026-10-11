@@ -11,6 +11,7 @@ import {
 import type { FreelancerProfile } from "@/lib/profiles-schema";
 import { serviceCategories } from "@/lib/services-schema";
 import { useSafePayWallet } from "@/lib/wallet/useSafePayWallet";
+import { useRouter } from "next/navigation";
 
 import { CurrencySelector, FxRateNotice, useFxRate } from "../currency-selector";
 
@@ -24,6 +25,59 @@ const experienceOptions = [
   { value: "5", label: "5+ years" },
   { value: "10", label: "10+ years" },
 ];
+function HireBox({ profile, money }: { profile: FreelancerProfile; money: (usd: number) => string }) {
+  const router = useRouter();
+  const [hours, setHours] = useState("10");
+  const [parts, setParts] = useState("1");
+  const hoursNumber = Number(hours);
+  const valid = Number.isFinite(hoursNumber) && hoursNumber >= 1 && hoursNumber <= 1000;
+  const total = valid ? Math.max(1, Math.round(hoursNumber * profile.hourlyRateUsd)) : 0;
+
+  const go = () => {
+    if (!valid) return;
+    const query = new URLSearchParams({
+      provider: profile.address,
+      name: profile.displayName,
+      title: `${hoursNumber} hours with ${profile.displayName}`,
+      listing: profile.headline,
+      hours: String(hoursNumber),
+      rate: String(profile.hourlyRateUsd),
+      parts,
+    });
+    router.push(`/create?${query.toString()}`);
+  };
+
+  const input = "mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-white";
+  return (
+    <div className="rounded-xl border border-slate-700 bg-slate-950/60 p-3">
+      <div className="grid grid-cols-2 gap-2">
+        <label className="text-xs text-slate-400">
+          Hours of work
+          <input value={hours} onChange={(event) => setHours(event.target.value)} type="number" min="1" max="1000" step="0.5" className={input} />
+        </label>
+        <label className="text-xs text-slate-400">
+          Payments
+          <select value={parts} onChange={(event) => setParts(event.target.value)} className={input}>
+            {[1, 2, 3, 4, 5].map((count) => (
+              <option key={count} value={count}>{count} {count === 1 ? "payment" : "payments"}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <p className="mt-2 text-xs text-slate-300">
+        {valid ? `${hoursNumber} h × $${profile.hourlyRateUsd} = ${money(total)}` : "Enter 1 to 1000 hours."}
+      </p>
+      <button
+        type="button"
+        onClick={go}
+        disabled={!valid}
+        className="mt-2 w-full rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold hover:bg-violet-500 disabled:opacity-50"
+      >
+        Hire with SafePay
+      </button>
+    </div>
+  );
+}
 
 export default function FindFreelancerPage() {
   const wallet = useSafePayWallet();
@@ -82,7 +136,10 @@ export default function FindFreelancerPage() {
     fx.status === "ready"
       ? `${formatDisplayCurrency(convertUsdToDisplayCurrency(usd, fx.data.rate), currency)} per hour (≈ $${usd.toLocaleString("en-US")})`
       : `$${usd.toLocaleString("en-US")} per hour`;
-
+  const money = (usd: number) =>
+    fx.status === "ready"
+      ? `${formatDisplayCurrency(convertUsdToDisplayCurrency(usd, fx.data.rate), currency)} (≈ $${usd.toLocaleString("en-US")})`
+      : `$${usd.toLocaleString("en-US")}`;
   const input = "rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white";
 
   return (
@@ -96,7 +153,7 @@ export default function FindFreelancerPage() {
               Pick someone, then pay safely through a SafePay agreement released by milestones.
             </p>
           </div>
-          {wallet.authenticated && wallet.role !== "freelancer" ? null : (
+          {(
             <Link href="/services/new" className="rounded-xl bg-teal-700 px-4 py-2 text-sm font-semibold hover:bg-teal-600">
               Create or edit my freelancer profile
             </Link>
@@ -181,7 +238,7 @@ export default function FindFreelancerPage() {
         <ul className="mt-4 grid gap-4 md:grid-cols-2">
           {profiles.map((profile) => {
             const isMine = profile.address === me;
-            const hireHref = `/create?provider=${profile.address}&title=${encodeURIComponent(`Work with ${profile.displayName}`)}&listing=${encodeURIComponent(profile.headline)}`;
+
             return (
               <li key={profile.address} className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
                 <div className="flex items-start justify-between gap-3">
@@ -209,9 +266,15 @@ export default function FindFreelancerPage() {
                   ) : isMine ? (
                     <Link href="/services/new" className="text-sm font-semibold text-teal-300 hover:text-teal-200">This is your profile · Edit</Link>
                   ) : (
-                    <Link href={hireHref} className="inline-block rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold hover:bg-violet-500">
-                      Hire with SafePay
-                    </Link>
+                      <div className="space-y-2">
+                      <HireBox profile={profile} money={money} />
+                      <Link
+                        href={`/messages/${profile.address}`}
+                        className="block rounded-lg border border-slate-600 px-4 py-2 text-center text-sm font-semibold text-slate-200 hover:border-slate-400"
+                      >
+                        Message {profile.displayName}
+                      </Link>
+                    </div>
                   )}
                 </div>
               </li>

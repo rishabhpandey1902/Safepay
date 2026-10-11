@@ -68,3 +68,26 @@ export function acceptanceTypedData(escrow: Address, terms: AcceptanceTerms) {
     },
   };
 }
+export function closureTypedData(escrow: Address, terms: AcceptanceTerms, kind: "declined" | "withdrawn") {
+  return {
+    domain: {
+      name: "SafePay Agreement",
+      version: "1",
+      chainId: monadTestnet.id,
+      verifyingContract: escrow,
+    },
+    types: {
+      Close: [
+        { name: "agreementId", type: "uint256" },
+        { name: "kind", type: "string" },
+        { name: "termsHash", type: "bytes32" },
+      ],
+    },
+    primaryType: "Close" as const,
+    message: {
+      agreementId: terms.agreementId,
+      kind,
+      termsHash: computeTermsHash(terms),
+    },
+  };
+}

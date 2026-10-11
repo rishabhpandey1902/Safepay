@@ -138,7 +138,17 @@ export default function ProjectDetailPage() {
             {project.category} · {project.country} · {project.deadlineDays} days
           </p>
           <p className="mt-1 font-semibold">Budget: {show(project.budgetUsd)}</p>
-          <p className="mt-2 break-all text-xs text-slate-500">Posted by {project.ownerAddress}</p>
+          <p className="mt-2 break-all text-xs text-slate-500">Posted by {project.ownerAddress}
+            {!isOwner && !project.isDemo ? (
+            <Link
+              href={`/messages/${project.ownerAddress}`}
+              className="mt-3 inline-block rounded-lg border border-slate-600 px-4 py-2 text-sm font-semibold text-slate-200 hover:border-slate-400"
+            >
+              Message the client
+            </Link>
+          ) : null}
+          </p>
+                    
           <div className="mt-4 flex flex-wrap items-end gap-4">
             <CurrencySelector value={currency} onChange={setCurrency} />
             <div className="min-w-0 flex-1">
@@ -155,7 +165,14 @@ export default function ProjectDetailPage() {
             <ul className="mt-4 space-y-3">
               {applications.map((application) => (
                 <li key={application.id} className="rounded-2xl border border-slate-700 bg-slate-950/70 p-4">
-                  <p className="break-all text-xs text-slate-400">{application.applicantAddress}</p>
+                  <p className="break-all text-xs text-slate-400">{application.applicantAddress}
+                                      {isOwner ? (
+                    <Link href={`/messages/${application.applicantAddress}`} className="mt-1 inline-block text-sm text-violet-300 hover:text-violet-200">
+                      Message this freelancer
+                    </Link>
+                  ) : null}
+                  </p>
+
                   <p className="mt-2 text-sm text-slate-200">{application.message}</p>
                   <p className="mt-2 text-sm font-semibold">
                     {show(application.proposedPriceUsd)} · {application.deliveryDays} days
@@ -186,11 +203,7 @@ export default function ProjectDetailPage() {
               Sign in to apply
             </RoleSignInLink>
           </section>
-        ) : isOwner ? null : wallet.role !== "freelancer" ? (
-          <section className="rounded-3xl border border-slate-800 bg-slate-900 p-6 text-sm text-slate-300">
-            Applying needs an account for getting paid. Log out, then sign in with &quot;I want to get paid&quot;.
-          </section>
-        ) : alreadyApplied ? (
+                ) : isOwner ? null : alreadyApplied ? (
           <section className="rounded-3xl border border-emerald-500/30 bg-emerald-500/10 p-6 text-sm text-emerald-100">
             You applied to this project. The client will contact you through a SafePay agreement.
           </section>

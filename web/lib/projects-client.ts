@@ -1,7 +1,7 @@
 import type { SafePayWalletClient } from "./wallet/session";
 
 export async function submitSigned<T>(args: {
-  action: "create_project" | "apply";
+  action: "create_project" | "apply" | "save_profile";
   endpoint: string;
   address: `0x${string}`;
   walletClient: SafePayWalletClient;

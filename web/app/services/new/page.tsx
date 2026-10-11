@@ -106,26 +106,6 @@ export default function FreelancerProfilePage() {
     );
   }
 
-  if (wallet.role !== "freelancer") {
-    return (
-      <main className="flex flex-1 items-center justify-center bg-slate-950 px-6 py-10">
-        <div className="w-full max-w-lg rounded-3xl border border-slate-800 bg-slate-900 p-8 text-slate-50">
-          <h1 className="text-2xl font-semibold">Freelancer account needed</h1>
-          <p className="mt-3 text-slate-300">
-            Profiles belong to accounts for getting paid. Log out, then sign in with &quot;I want to get paid&quot;.
-          </p>
-          <button
-            type="button"
-            onClick={() => void wallet.logout()}
-            className="mt-6 rounded-xl bg-violet-600 px-4 py-3 font-semibold hover:bg-violet-500"
-          >
-            Log out
-          </button>
-        </div>
-      </main>
-    );
-  }
-
   const field = "mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white";
 
   return (

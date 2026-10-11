@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import type { Account, Address, Chain, PublicClient, Transport, WalletClient } from "viem";
 
@@ -47,7 +47,6 @@ export function WalletSessionProvider({
   publicClient: PublicClient;
 }) {
   const [role, setRole] = useState<SafePayRole | null>(null);
-  const roleRef = useRef<SafePayRole | null>(null);
   const [roleLoaded, setRoleLoaded] = useState(false);
   const [walletState, setWalletStateValue] = useState<WalletState>({
     authenticated: false,
@@ -56,37 +55,33 @@ export function WalletSessionProvider({
   const [otpSent, setOtpSent] = useState(false);
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      const storedRole = window.sessionStorage.getItem("safepay-role");
-      if (storedRole === "client" || storedRole === "freelancer") {
-        roleRef.current = storedRole;
-        // Restore after hydration so session-specific SDK providers do not cause an SSR mismatch.
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setRole(storedRole);
-      }
-      setRoleLoaded(true);
-    }
+    // Every account signs in with Dynamic. This is set after the page loads so
+    // the server and browser markup stay identical.
+    /* eslint-disable react-hooks/set-state-in-effect */
+    setRole("freelancer");
+    setRoleLoaded(true);
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
 
-  const selectRole = useCallback((nextRole: SafePayRole) => {
-    if (roleRef.current && roleRef.current !== nextRole) {
-      throw new Error("Log out before changing wallet roles.");
-    }
-    window.sessionStorage.setItem("safepay-role", nextRole);
-    roleRef.current = nextRole;
-    setRole(nextRole);
-    setWalletStateValue({ authenticated: false, sdkReady: false });
-  }, []);
+  // There is only one sign-in option now, so choosing a role does nothing.
+  const selectRole = useCallback((): void => undefined, []);
 
+  // Clears the signed-in wallet but keeps the sign-in functions for the next login.
   const clearRole = useCallback(() => {
-    window.sessionStorage.removeItem("safepay-role");
-    roleRef.current = null;
-    setRole(null);
     setOtpSent(false);
-    setWalletStateValue({ authenticated: false, sdkReady: true });
+    setWalletStateValue((current) => ({
+      ...current,
+      authenticated: false,
+      address: undefined,
+      walletClient: undefined,
+      chainId: undefined,
+      chainName: undefined,
+      error: undefined,
+    }));
   }, []);
 
-    const setWalletState = useCallback((state: WalletState | ((current: WalletState) => WalletState)) => {
+  // Skips updates that change nothing, which prevents render loops.
+  const setWalletState = useCallback((state: WalletState | ((current: WalletState) => WalletState)) => {
     setWalletStateValue((current) => {
       const next = typeof state === "function" ? state(current) : state;
       const keys = new Set([...Object.keys(current), ...Object.keys(next)]) as Set<keyof WalletState>;

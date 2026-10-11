@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { displayCurrencies } from "@/lib/currency";
-import { getFxRateSnapshot, saveFxRateSnapshot } from "@/lib/services-db";
+import { getFxRateSnapshot, saveFxRateSnapshot } from "@/lib/fx-cache";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -52,7 +52,7 @@ export async function GET(request: Request) {
 
   let cached;
   try {
-    cached = getFxRateSnapshot();
+    cached = await getFxRateSnapshot();
   } catch (error) {
     console.error("Could not read cached FX rates:", error);
     return NextResponse.json(
@@ -72,7 +72,7 @@ export async function GET(request: Request) {
     );
   }
 
-  try {
+  try{
     const response = await fetch("https://open.er-api.com/v6/latest/USD", {
       cache: "no-store",
       signal: AbortSignal.timeout(8_000),
@@ -94,7 +94,7 @@ export async function GET(request: Request) {
       fetchedAt: now,
       rateTimestamp: new Date(parsed.data.time_last_update_unix * 1000).toISOString(),
     };
-    saveFxRateSnapshot(snapshot);
+    await saveFxRateSnapshot(snapshot);
     return rateResponse(currency, rate, snapshot.rateTimestamp, false, null);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown FX provider failure.";

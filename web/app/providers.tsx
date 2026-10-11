@@ -5,11 +5,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { PrivyProvider, usePrivy, useWallets } from "@privy-io/react-auth";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPublicClient, createWalletClient, custom, http, type Address } from "viem";
-
+import { WalletBalance } from "./wallet-balance";
 import { monadTestnet } from "@/lib/monad";
 import { dynamicClient } from "@/lib/wallet/dynamic-client";
 import { WalletSessionProvider, useWalletSession } from "@/lib/wallet/session";
 import { createWalletClientForWalletAccount } from "@dynamic-labs-sdk/evm/viem";
+import { throttledFetch } from "@/lib/rpc-fetch";
+import { ApiSessionProvider } from "@/lib/api-session";
 import {
   getNetworksData,
   switchActiveNetwork,
@@ -30,7 +32,10 @@ import { TokenProvider } from "./token-provider";
 import type { SafePayWalletClient } from "@/lib/wallet/session";
 
 const rpcUrl = process.env.NEXT_PUBLIC_MONAD_RPC_URL ?? monadTestnet.rpcUrls.default.http[0];
-const publicClient = createPublicClient({ chain: monadTestnet, transport: http(rpcUrl) });
+const publicClient = createPublicClient({
+  chain: monadTestnet,
+  transport: http(rpcUrl, { fetchFn: throttledFetch, retryCount: 5, retryDelay: 400, timeout: 30_000 }),
+});
 const privyAppId = process.env.NEXT_PUBLIC_PRIVY_APP_ID ?? "";
 
 export function Providers({ children }: { children: ReactNode }) {
@@ -39,8 +44,10 @@ export function Providers({ children }: { children: ReactNode }) {
   return (
     <TokenProvider>
       <WalletSessionProvider publicClient={publicClient}>
-        <WalletRuntime queryClient={queryClient}>{children}</WalletRuntime>
-      </WalletSessionProvider>
+        <WalletRuntime queryClient={queryClient}>
+          <ApiSessionProvider>{children}</ApiSessionProvider>
+        </WalletRuntime>
+        </WalletSessionProvider>
     </TokenProvider>
   );
 }
@@ -263,8 +270,12 @@ function DynamicWalletBridge({ children }: { children: ReactNode }) {
     if (!otpVerification) throw new Error("Request an email code first.");
     await verifyOTP({ otpVerification, verificationToken: code });
   }, [otpVerification, verifyOTP]);
-  const logoutUser = useCallback(async () => {
-    await logout();
+   const logoutUser = useCallback(async () => {
+    try {
+      await logout();
+    } catch {
+      // The Dynamic session had already expired. Clear the app state anyway.
+    }
     clearRole();
     setOtpSent(false);
   }, [logout, clearRole, setOtpSent]);
@@ -398,7 +409,7 @@ function WalletStatus() {
       <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-3 gap-y-1">
         <span className="font-semibold text-violet-300">{provider === "privy" ? "Privy" : "Dynamic"}</span>
         <span className="break-all">{address ?? "Wallet connecting…"}</span>
-        <span>{chainName ?? "Monad Testnet"}{chainId ? ` · chain ${chainId}` : ""}</span>
+        <span>{chainName ?? "Monad Testnet"}<WalletBalance />{chainId ? ` · chain ${chainId}` : ""}</span>
         {error ? <span role="alert" className="text-red-300">{error}</span> : null}
       </div>
     </aside>

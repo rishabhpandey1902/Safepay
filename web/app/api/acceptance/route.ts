@@ -5,6 +5,7 @@ import { z } from "zod";
 import { acceptanceTypedData, computeTermsHash } from "@/lib/acceptance";
 import { getEscrowAddress, readAgreementTerms } from "@/lib/agreement-chain";
 import { getAcceptances, saveAcceptance } from "@/lib/safepay-store";
+import { displayName, notify } from "@/lib/notify";
 
 export const dynamic = "force-dynamic";
 
@@ -65,6 +66,13 @@ export async function POST(request: Request) {
       termsHash: computeTermsHash(terms),
       signature,
     });
+        await notify({
+      address: terms.client,
+      type: "agreement",
+      title: "Agreement accepted",
+      body: `${await displayName(terms.contractor)} accepted your agreement. You can fund it now.`,
+      link: `/agreement/${agreementId}`,
+    }).catch(() => undefined);
     return NextResponse.json({ ok: true });
   } catch {
     return NextResponse.json({ error: "Could not record the acceptance." }, { status: 500 });
