@@ -48,6 +48,7 @@ If there is a disagreement, either person can dispute a submitted milestone. The
 | Describe in words | Type a sentence and get an editable draft agreement (Google Gemini free tier). It never creates or funds anything | Live <!-- VERIFY or remove this row if the box is hidden --> |
 | Cross-network funding screen | Static preview of funding from another network | Preview (no real bridging) |
 | Bank deposit and withdrawal | Described on the Wallet page as a roadmap item | Planned |
+| Dispute room | Client, contractor and resolver share one chat, see the delivery and the written reason, and can remind the resolver | Live |
 
 ## Try it (for judges)
 
@@ -148,6 +149,7 @@ Main functions: `createAgreement`, `fundAgreement`, `submitMilestone`, `approveM
 - **No bank connection.** Adding or withdrawing money from a bank account is not available. It would need licensed on-ramp providers.
 - **The keeper acts on request.** It sends a release when a milestone is past its deadline and someone asks for it. It is not a continuously running scheduler.
 - **Delivery notes are public on-chain.** The contractor's note and link are stored in the milestone's evidence field (about 2,000 bytes), visible to anyone reading the contract.
+- **The resolver has no deadline.** Disputed money stays locked until the resolver decides. The app notifies the resolver and allows reminders, but the contract cannot force a decision.
 
 ## Run it locally
 
@@ -222,6 +224,7 @@ Nothing below is built yet. It is what SafePay would add next, in rough priority
 - **Optional identity checks** for larger amounts, and stronger spam and fraud controls on the marketplace.
 - **A professional smart-contract audit**, a bug bounty, and a pause and upgrade plan before any real funds are used.
 - **Reject and resubmit on-chain.** Let a payer send a milestone back for changes, with a limit on rejections, so the contractor can deliver again without opening a dispute.
+- **Resolver deadlines and backup resolvers**, so a dispute that is ignored is passed on or settled by a default rule.
 
 ### 4. A better experience
 - **A mobile app** (installable web app first, then native) built around one-tap payments.

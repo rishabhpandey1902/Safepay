@@ -478,16 +478,20 @@ export default function AgreementPage() {
         })) as `0x${string}`;
       } else if (action === "dispute") {
         if (milestoneIndex === undefined) return;
-        const data = disputeForm[milestoneIndex] ?? { note: "", link: "" };
-        const note = data.note.trim() || "I am raising a dispute.";
+                const note = data.note.trim();
         const link = data.link.trim();
-        if (new TextEncoder().encode(link).length > 2048) throw new Error("Dispute links must be 2,048 bytes or fewer.");
-        const reasonHash = keccak256(toBytes(note));
+        if (!note) throw new Error("Explain why you are raising a dispute. The resolver will read it.");
+        if (link && !/^https?:\/\//i.test(link)) throw new Error("Links must start with http:// or https://.");
+        const packed = JSON.stringify({ n: note, l: link });
+        if (new TextEncoder().encode(packed).length > 2000) {
+          throw new Error("The reason and link are too long. Shorten them and add details in the dispute chat.");
+        }
+        const reasonHash = keccak256(toBytes(packed));
         hash = (await walletClient.writeContract({
           address: contractAddress,
           abi: safePayEscrowAbi,
           functionName: "raiseDispute",
-          args: [BigInt(agreementId), BigInt(milestoneIndex), reasonHash, link],
+          args: [BigInt(agreementId), BigInt(milestoneIndex), reasonHash, packed],
         })) as `0x${string}`;
       } else if (action === "release") {
         if (milestoneIndex === undefined) throw new Error("Choose a milestone to release.");
@@ -947,10 +951,10 @@ export default function AgreementPage() {
 
                               {statusNumber === 3 ? (
                                 <Link
-                                  href={`/dispute/${agreementId}`}
+                                  href={`/dispute-room/${agreementId}`}
                                   className="inline-flex items-center justify-center rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm font-semibold text-amber-200 transition hover:bg-amber-500/20"
                                 >
-                                  View dispute record
+                                  Open dispute room
                                 </Link>
                               ) : null}
 
@@ -1016,6 +1020,15 @@ export default function AgreementPage() {
                 >
                   {busyAction === "cancel" ? "Cancelling agreement…" : "Cancel agreement"}
                 </button>
+              </section>
+            ) : null}
+
+            {milestones.some((item) => Number(item.status) === 3) ? (
+              <section className="mt-8 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100">
+                <p>A milestone on this agreement is in dispute.</p>
+                <Link href={`/dispute-room/${agreementId}`} className="mt-2 inline-block rounded-lg border border-amber-500/50 px-4 py-2 font-semibold hover:bg-amber-500/10">
+                  Open the dispute room
+                </Link>
               </section>
             ) : null}
 

@@ -61,10 +61,12 @@ export async function readAgreementTerms(
 }
 export { client as chainClient };
 
-const partiesCache = new Map<number, { client: string; contractor: string }>();
+const partiesCache = new Map<number, { client: string; contractor: string; resolver: string }>();
 
 /** Cheap lookup of who is in an agreement. The result never changes, so it is cached. */
-export async function readAgreementParties(agreementId: number): Promise<{ client: string; contractor: string }> {
+export async function readAgreementParties(
+  agreementId: number,
+): Promise<{ client: string; contractor: string; resolver: string }> {
   const cached = partiesCache.get(agreementId);
   if (cached) return cached;
   const agreement = await client.readContract({
@@ -74,7 +76,11 @@ export async function readAgreementParties(agreementId: number): Promise<{ clien
     args: [BigInt(agreementId)],
   });
   if (/^0x0+$/.test(agreement.client)) throw new Error("Agreement not found.");
-  const parties = { client: agreement.client.toLowerCase(), contractor: agreement.contractor.toLowerCase() };
+  const parties = {
+    client: agreement.client.toLowerCase(),
+    contractor: agreement.contractor.toLowerCase(),
+    resolver: agreement.resolver.toLowerCase(),
+  };
   partiesCache.set(agreementId, parties);
   return parties;
 }

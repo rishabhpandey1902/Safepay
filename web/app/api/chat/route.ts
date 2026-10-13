@@ -35,8 +35,11 @@ export async function GET(request: Request) {
         )
       : [];
 
+  const names: Record<string, string> = {};
+  for (const member of info.members) names[member] = await displayName(member);
+
   return NextResponse.json({
-    names: { [info.a]: await displayName(info.a), [info.b]: await displayName(info.b) },
+    names,
     messages: rows.map((row) => ({
       id: Number(row.id),
       sender: row.sender,
@@ -89,7 +92,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Each file must be between 1 byte and 1 MB. Share larger files with a link." }, { status: 400 });
   }
 
-  await ensureThread(info);
+  // Dispute chats are reached from the dispute room, so they stay out of the Messages inbox.
+  if (info.kind !== "dispute") await ensureThread(info);
   const createdAt = new Date().toISOString();
   const id = await dbInsert("INSERT INTO chat_messages (thread, sender, body, created_at) VALUES (?, ?, ?, ?)", [
     info.thread,
@@ -114,15 +118,27 @@ export async function POST(request: Request) {
     info.thread,
   ]);
 
-  const other = me === info.a ? info.b : info.a;
-  await notify({
-    address: other,
-    type: "chat",
-    title: `New message from ${await displayName(me)}`,
-    body: preview,
-    link: info.kind === "agreement" ? `/agreement/${info.thread.split(":")[1]}#chat` : `/messages/${me}`,
-    collapse: true,
-  }).catch(() => undefined);
+  const agreementNumber = info.thread.split(":")[1];
+  const link =
+    info.kind === "agreement"
+      ? `/agreement/${agreementNumber}#chat`
+      : info.kind === "dispute"
+        ? `/dispute-room/${agreementNumber}`
+        : `/messages/${me}`;
+  const sender = await displayName(me);
+  for (const member of info.members.filter((candidate) => candidate !== me)) {
+    await notify({
+      address: member,
+      type: "chat",
+      title:
+        info.kind === "dispute"
+          ? `Dispute chat on agreement #${agreementNumber}: ${sender}`
+          : `New message from ${sender}`,
+      body: preview,
+      link,
+      collapse: true,
+    }).catch(() => undefined);
+  }
 
   return NextResponse.json({ ok: true, id });
 }

@@ -15,7 +15,7 @@ const bodySchema = z.object({
   txHash: z.string().refine(isHash, "Enter a valid transaction hash."),
 });
 
-type Note = { to: string; title: string; body: string };
+type Note = { to: string; title: string; body: string; link?: string };
 
 export async function POST(request: Request) {
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
@@ -81,7 +81,23 @@ export async function POST(request: Request) {
           { to: client, title: `Milestone ${index} released`, body: "The approval window ended, so the payment was released automatically." },
         ];
         break;
-      case "raiseDispute":
+            case "raiseDispute":
+        if (!sameAgreement || !isParty) return bad("That transaction did not raise a dispute on this agreement.");
+        notes = [
+          {
+            to: from === client ? contractor : client,
+            title: "Dispute raised",
+            body: `${who} raised a dispute on milestone ${index}. Open the dispute room to respond.`,
+            link: `/dispute-room/${agreementId}`,
+          },
+          {
+            to: resolver,
+            title: "A dispute needs your decision",
+            body: `A dispute was raised on milestone ${index} of agreement #${agreementId}. Open the dispute room.`,
+            link: `/dispute-room/${agreementId}`,
+          },
+        ];
+        break;
         if (!sameAgreement || !isParty) return bad("That transaction did not raise a dispute on this agreement.");
         notes = [
           { to: from === client ? contractor : client, title: "Dispute raised", body: `${who} raised a dispute on milestone ${index}.` },
@@ -113,7 +129,7 @@ export async function POST(request: Request) {
     await notifyMany(
       notes
         .filter((note) => note.to !== from)
-        .map((note) => ({ address: note.to, type: "agreement", title: note.title, body: note.body, link })),
+                .map((note) => ({ address: note.to, type: "agreement", title: note.title, body: note.body, link: note.link ?? link })),
     );
     return NextResponse.json({ ok: true });
   } catch {

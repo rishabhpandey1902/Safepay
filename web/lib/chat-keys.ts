@@ -12,3 +12,4 @@ export function dmThread(x: string, y: string): string {
 }
 
 export const shortAddress = (value: string) => `${value.slice(0, 6)}…${value.slice(-4)}`;
+export const disputeThread = (id: number) => `dispute:${id}`;
