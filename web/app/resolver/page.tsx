@@ -69,7 +69,7 @@ export default function ResolverPage() {
     ? "Set NEXT_PUBLIC_SAFE_PAY_ESCROW_ADDRESS before opening the resolver queue."
     : tokenConfig.status === "error"
       ? tokenConfig.error
-    : null;
+      : null;
   const walletError = authenticated && !activeAddress ? "Your resolver wallet is not ready yet." : null;
   const visibleError = error ?? configurationError ?? walletError;
 
@@ -236,7 +236,12 @@ export default function ResolverPage() {
                       <p className="mt-1 text-sm text-slate-400">Disputed amount: {amount}</p>
                     </div>
                     <Link href={`/dispute/${entry.agreementId}`} className="text-sm font-medium text-teal-300 hover:text-teal-200">View dispute record</Link>
-             <Link href={`/dispute-room/${AGREEMENT_ID}`} className="text-sm text-violet-300 hover:text-violet-200">Open dispute room</Link>
+                    <Link
+                      href={`/dispute-room/${entry.agreementId}`}
+                      className="text-sm text-violet-300 hover:text-violet-200"
+                    >
+                      Open dispute room
+                    </Link>
                   </header>
 
                   <div className="grid gap-4 px-5 py-4 sm:grid-cols-2">

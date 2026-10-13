@@ -478,8 +478,9 @@ export default function AgreementPage() {
         })) as `0x${string}`;
       } else if (action === "dispute") {
         if (milestoneIndex === undefined) return;
-                const note = data.note.trim();
-        const link = data.link.trim();
+        const data = submitForm[milestoneIndex] ?? { note: "", link: "" };
+  const note = data.note.trim();
+  const link = data.link.trim();
         if (!note) throw new Error("Explain why you are raising a dispute. The resolver will read it.");
         if (link && !/^https?:\/\//i.test(link)) throw new Error("Links must start with http:// or https://.");
         const packed = JSON.stringify({ n: note, l: link });
