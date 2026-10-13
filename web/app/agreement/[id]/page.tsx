@@ -13,6 +13,7 @@ import { useSafePayWallet } from "@/lib/wallet/useSafePayWallet";
 import { RoleSignInLink } from "@/lib/wallet/role-sign-in-link";
 import { useTokenConfig } from "../../token-provider";
 import { ChatBox } from "@/app/chat-box";
+import { useApiSession } from "@/lib/api-session";
 
 const milestoneStatusLabels: Record<number, string> = {
   0: "Locked",
@@ -119,6 +120,9 @@ export default function AgreementPage() {
   const [acceptedAt, setAcceptedAt] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [closure, setClosure] = useState<"declined" | "withdrawn" | null>(null);
+  const { authedFetch } = useApiSession();
+  const [noteDraft, setNoteDraft] = useState<Record<number, string>>({});
+  const [notice, setNotice] = useState<string | null>(null);
 
   const contractAddress = process.env.NEXT_PUBLIC_SAFE_PAY_ESCROW_ADDRESS as Address | undefined;
   const configurationError = !contractAddress || !isAddress(contractAddress) || contractAddress === "0x0000000000000000000000000000000000000000"
@@ -346,6 +350,35 @@ export default function AgreementPage() {
       setBusyAction(null);
     }
   };
+    const sendMilestoneNote = async (index: number, kind: "changes" | "update") => {
+    const text = (noteDraft[index] ?? "").trim();
+    if (!text) {
+      setError("Write a short message first.");
+      return;
+    }
+    setBusyAction(`note-${index}`);
+    setError(null);
+    setNotice(null);
+    try {
+      const prefix =
+        kind === "changes"
+          ? `Changes requested on milestone ${index + 1}:`
+          : `Updated delivery for milestone ${index + 1}:`;
+      const response = await authedFetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ thread: `agreement:${agreementId}`, body: `${prefix} ${text}`, files: [] }),
+      });
+      const body = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(body.error ?? "Could not send your message.");
+      setNoteDraft((current) => ({ ...current, [index]: "" }));
+      setNotice("Sent. It appears in the chat below, and the other person was notified.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not send your message.");
+    } finally {
+      setBusyAction(null);
+    }
+  };
 
   const getWalletClient = async () => {
     if (!walletClient || !authenticated || !address) return null;
@@ -568,6 +601,11 @@ export default function AgreementPage() {
         {visibleError ? (
           <div className="mb-6 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-200">
             {visibleError}
+          </div>
+        ) : null}
+                {notice ? (
+          <div className="mb-6 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+            {notice}
           </div>
         ) : null}
 
@@ -874,6 +912,34 @@ export default function AgreementPage() {
                                 </button>
                               ) : null}
 
+                                                            {submitted && (isClient || isContractor) ? (
+                                <div className="rounded-xl border border-slate-700 bg-slate-950/80 p-3">
+                                  <p className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-400">
+                                    {isClient ? "Request changes" : "Send updated delivery"}
+                                  </p>
+                                  <textarea
+                                    value={noteDraft[index] ?? ""}
+                                    onChange={(event) => setNoteDraft((current) => ({ ...current, [index]: event.target.value }))}
+                                    placeholder={isClient ? "What should be fixed?" : "What did you update? Paste a new link if needed."}
+                                    rows={2}
+                                    maxLength={500}
+                                    className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-white outline-none focus:border-violet-500"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => void sendMilestoneNote(index, isClient ? "changes" : "update")}
+                                    disabled={busyAction !== null}
+                                    className="mt-2 w-full rounded-lg border border-violet-500/50 bg-violet-500/10 px-3 py-2 text-sm font-semibold text-violet-200 hover:bg-violet-500/20 disabled:opacity-60"
+                                  >
+                                    {busyAction === `note-${index}` ? "Sending…" : "Send"}
+                                  </button>
+                                  <p className="mt-2 text-xs text-amber-200">
+                                    Approval deadline: {new Date(Number(milestone.approvalDeadline) * 1000).toLocaleString()}.
+                                    The client should approve or raise a dispute before then. After it, the payment can be
+                                    released to the contractor.
+                                  </p>
+                                </div>
+                              ) : null}
                               {submitted && chainTimestamp === null ? <p className="text-xs text-slate-400">Checking Monad testnet deadlines…</p> : null}
                               {submitted && chainTimestamp !== null && chainTimestamp >= milestone.approvalDeadline && isClient ? (
                                 <p className="text-xs text-slate-400">Approval window ended. Anyone can release this payment to the contractor.</p>

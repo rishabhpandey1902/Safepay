@@ -138,7 +138,8 @@ Main functions: `createAgreement`, `fundAgreement`, `submitMilestone`, `approveM
 - **Honest labels.** Demo profiles and projects are marked as demo data and cannot be hired.
 
 ## Limitations
-
+  
+- **No on-chain "request changes".** A submitted milestone is approved, disputed, or released after its approval deadline. Change requests and updated deliveries are sent in the agreement chat and do not pause the deadline.  
 - **Testnet only, unaudited.** Do not use real money. The contract has not been professionally audited.
 - **Test token, not AUSD.** Payments settle in a mock token. Display prices in other currencies are conversions for reading only and assume the token is worth about one US dollar.
 - **Accept, decline and withdraw are enforced by the app, not the contract.** Someone calling the contract directly could fund an agreement the contractor has not accepted. A declined or withdrawn draft holds no funds.
@@ -220,6 +221,7 @@ Nothing below is built yet. It is what SafePay would add next, in rough priority
 - **Evidence storage** for photos and documents (for example on decentralised storage), referenced from the milestone.
 - **Optional identity checks** for larger amounts, and stronger spam and fraud controls on the marketplace.
 - **A professional smart-contract audit**, a bug bounty, and a pause and upgrade plan before any real funds are used.
+- **Reject and resubmit on-chain.** Let a payer send a milestone back for changes, with a limit on rejections, so the contractor can deliver again without opening a dispute.
 
 ### 4. A better experience
 - **A mobile app** (installable web app first, then native) built around one-tap payments.
