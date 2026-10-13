@@ -248,6 +248,18 @@ export default function SignIn() {
               </button>
             </form>
             <p className="text-center text-xs text-slate-500">Secured by Dynamic</p>
+                        <div className="border-t border-slate-800 pt-4">
+              <button
+                type="button"
+                disabled
+                aria-disabled="true"
+                title="Coming soon"
+                className="flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl border border-slate-700 px-4 py-3 text-sm font-semibold text-slate-500"
+              >
+                Connect an existing wallet
+                <span className="rounded-full border border-slate-700 px-2 py-0.5 text-xs">Coming soon</span>
+              </button>
+            </div>
           </section>
         )}
       </div>

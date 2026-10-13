@@ -141,7 +141,7 @@ export default function AgreementPage() {
 
     const loadAgreement = async () => {
       try {
-        setLoading(true);
+        
         const agreementData = (await publicClient.readContract({
           address: contractAddress,
           abi: safePayEscrowAbi,
@@ -183,6 +183,17 @@ export default function AgreementPage() {
     if (configurationError || routeError) return;
     let active = true;
     const loadOffChain = async () => {
+        useEffect(() => {
+    const refresh = () => setRefreshTick((current) => current + 1);
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") refresh();
+    }, 15_000);
+    window.addEventListener("safepay:refresh", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("safepay:refresh", refresh);
+    };
+  }, []);
       try {
         const [detailsResponse, acceptanceResponse, closureResponse] = await Promise.all([
           fetch(`/api/agreement-details?id=${agreementId}`, { cache: "no-store" }),

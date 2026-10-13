@@ -200,12 +200,50 @@ Tests: `forge test` in `contracts/` covers approval and release, cancellation, d
 
 ## Roadmap and business model
 
-Not built yet:
+Nothing below is built yet. It is what SafePay would add next, in rough priority order. Items that move real money depend on licensed partners and local regulation.
 
-- Settlement in AUSD and a cross-border send flow, with passkey onboarding.
-- Bank and UPI on and off-ramps through licensed providers.
-- Chainlink CRE for scheduled releases, an independent resolver network, and a professional audit.
-- Business model: free for small payments, a small protection fee (about 0.25 to 0.75 percent) for larger agreements, and an API so marketplaces can add protected payments.
+### 1. Money in and out
+- **Withdraw in your local currency.** Receive a payment in a stablecoin, then cash out to a bank account or UPI in rupees, euros, pesos and more, through licensed off-ramp providers.
+- **Add money from a bank or UPI.** The same in reverse, so a payer never needs to know what a token is.
+- **Settle in AUSD or another regulated stablecoin** instead of the test token, with fees and rates shown before you confirm.
+- **Real exchange rates** from a regulated provider, locked for a short time at the moment you create an agreement, and a clear fee breakdown for cross-border payments.
+
+### 2. Sign in your way
+- **Log in with any wallet.** Let people who already have a wallet (MetaMask, Rabby, WalletConnect wallets) sign in with it, so their existing address and funds work in SafePay.
+- **Passkey sign-in** (Face ID, Touch ID, or a security key) with no password and no seed phrase.
+- **Google and other social sign-in**, plus **linking several sign-in methods to one account**, so a person keeps one wallet whichever way they sign in.
+- **Wallet recovery and export** for people who want full control of their keys.
+
+### 3. Trust and disputes
+- **Reviews, ratings and reputation** that follow a wallet, with verified past agreements.
+- **An independent resolver network** instead of a single resolver, with evidence timelines and appeal.
+- **Evidence storage** for photos and documents (for example on decentralised storage), referenced from the milestone.
+- **Optional identity checks** for larger amounts, and stronger spam and fraud controls on the marketplace.
+- **A professional smart-contract audit**, a bug bounty, and a pause and upgrade plan before any real funds are used.
+
+### 4. A better experience
+- **A mobile app** (installable web app first, then native) built around one-tap payments.
+- **Alerts by email, WhatsApp and push**, plus reminders before an approval window ends.
+- **End-to-end encrypted chat**, voice notes and larger files.
+- **Milestone templates** for common jobs (painting, renovation, design, tutoring) and invoices and receipts as PDFs.
+- **More languages and currencies** across the whole app.
+
+### 5. More ways to pay
+- **Recurring payments**, for example a tutor paid monthly with a release after each session.
+- **Teams and multi-party agreements** (a contractor with subcontractors, split payouts).
+- **Tips, bonuses and change requests** that add a milestone to a running agreement.
+- **Payment links and QR codes** a seller can share, which open a ready-made agreement.
+- **Cross-chain funding**, so a payer can fund from the network where they already hold money.
+
+### 6. Automation
+- **Scheduled releases** with Chainlink CRE or a dedicated scheduler, so the keeper acts the moment a deadline passes without anyone asking.
+- **Webhooks** that tell a platform when an agreement is funded, delivered, released or disputed.
+
+### 7. Business model
+- Free for small payments, so everyday people can try it.
+- A small protection fee (about 0.25 to 0.75 percent) on larger agreements, paid out of the payment itself.
+- An **API and widget for marketplaces and service platforms**, such as home services, freelance sites and tutoring, who want protected payments without building escrow themselves, with a transaction fee.
+- Premium features for professionals: branded payment pages, team accounts, reporting and accounting exports.
 
 ## Disclaimer
 

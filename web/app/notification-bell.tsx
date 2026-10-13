@@ -82,10 +82,17 @@ export function NotificationBell() {
     }).catch(() => undefined);
   };
 
-  const openItem = (item: NotificationItem) => {
+    const openItem = (item: NotificationItem) => {
     setOpen(false);
     setToast(null);
     if (!item.isRead) void markRead([item.id]);
+    const target = new URL(item.link, window.location.origin);
+    if (target.pathname === window.location.pathname) {
+      // Already on this page: refresh its data instead of navigating.
+      window.dispatchEvent(new Event("safepay:refresh"));
+      if (target.hash) window.location.hash = target.hash;
+      return;
+    }
     router.push(item.link);
   };
 
