@@ -17,6 +17,7 @@ const links = [
   { href: "/keeper", label: "Keeper" },
   { href: "/history", label: "Wallet history" },
   { href: "/messages", label: "Messages" },
+  { href: "/wallet", label: "Wallet" },
 ];
 
 function shortAddress(address?: string) {

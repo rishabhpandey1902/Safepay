@@ -140,8 +140,9 @@ export default function AgreementPage() {
     if (configurationError || routeError || !contractAddress) return;
 
     const loadAgreement = async () => {
+      // setLoading(true);
       try {
-        
+
         const agreementData = (await publicClient.readContract({
           address: contractAddress,
           abi: safePayEscrowAbi,
@@ -182,41 +183,42 @@ export default function AgreementPage() {
   useEffect(() => {
     if (configurationError || routeError) return;
     let active = true;
-    const loadOffChain = async () => {
-        useEffect(() => {
-    const refresh = () => setRefreshTick((current) => current + 1);
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") refresh();
-    }, 15_000);
-    window.addEventListener("safepay:refresh", refresh);
-    return () => {
-      window.clearInterval(timer);
-      window.removeEventListener("safepay:refresh", refresh);
-    };
-  }, []);
+    useEffect(() => {
+      const refresh = () => setRefreshTick((current) => current + 1);
+      const timer = window.setInterval(() => {
+        if (document.visibilityState === "visible") refresh();
+      }, 10_000);
+      window.addEventListener("safepay:refresh", refresh);
+      window.addEventListener("focus", refresh);
+      return () => {
+        window.clearInterval(timer);
+        window.removeEventListener("safepay:refresh", refresh);
+        window.removeEventListener("focus", refresh);
+      };
+    }, []);
+    const readJson = async <T,>(url: string): Promise<T | null> => {
       try {
-        const [detailsResponse, acceptanceResponse, closureResponse] = await Promise.all([
-          fetch(`/api/agreement-details?id=${agreementId}`, { cache: "no-store" }),
-          fetch(`/api/acceptance?ids=${agreementId}`, { cache: "no-store" }),
-          fetch(`/api/agreement-closure?ids=${agreementId}`, { cache: "no-store" }),
-        ]);
-        const detailsBody = (await detailsResponse.json()) as { descriptions?: string[] };
-        const acceptanceBody = (await acceptanceResponse.json()) as {
-          accepted?: Record<string, { createdAt: string }>;
-        };
-        const closureBody = (await closureResponse.json()) as { closed?: Record<string, "declined" | "withdrawn"> };
-        if (!active) return;
-        setDetails(detailsResponse.ok && Array.isArray(detailsBody.descriptions) ? detailsBody.descriptions : null);
-        setAcceptedAt(acceptanceResponse.ok ? acceptanceBody.accepted?.[String(agreementId)]?.createdAt ?? null : null);
-        setClosure(closureResponse.ok ? closureBody.closed?.[String(agreementId)] ?? null : null);
+        const response = await fetch(url, { cache: "no-store" });
+        if (!response.ok) return null;
+        return (await response.json()) as T;
       } catch {
-        if (active) {
-          setDetails(null);
-          setAcceptedAt(null);
-          setClosure(null);
-        }
+        return null;
       }
     };
+
+    const loadOffChain = async () => {
+      const [detailsBody, acceptanceBody, closureBody] = await Promise.all([
+        readJson<{ descriptions?: string[] }>(`/api/agreement-details?id=${agreementId}`),
+        readJson<{ accepted?: Record<string, { createdAt: string }> }>(`/api/acceptance?ids=${agreementId}`),
+        readJson<{ closed?: Record<string, "declined" | "withdrawn"> }>(`/api/agreement-closure?ids=${agreementId}`),
+      ]);
+      if (!active) return;
+      // A request that fails keeps what the page already knows instead of wiping it.
+      if (detailsBody?.descriptions) setDetails(detailsBody.descriptions);
+      if (acceptanceBody) setAcceptedAt(acceptanceBody.accepted?.[String(agreementId)]?.createdAt ?? null);
+      if (closureBody) setClosure(closureBody.closed?.[String(agreementId)] ?? null);
+    };
+
     void loadOffChain();
     return () => {
       active = false;
@@ -247,59 +249,60 @@ export default function AgreementPage() {
   const canAct = isClient || isContractor;
   const canFund = Boolean(agreement && isClient && agreement.status === 0);
   const canCancel = Boolean(agreement && canAct && agreement.status === 1);
-    const hasOutstanding = milestones.some((item) => Number(item.status) === 1 || Number(item.status) === 3);
+  const hasOutstanding = milestones.some((item) => Number(item.status) === 1 || Number(item.status) === 3);
   const shareUrl = typeof window !== "undefined" ? `${window.location.origin}/agreement/${agreementId}` : "";
-            const shareText = `I created a SafePay agreement for you. Review and accept it here: ${shareUrl}`;
-const toDays = (seconds: bigint) => Number(seconds) / 86_400;
+  const shareText = `I created a SafePay agreement for you. Review and accept it here: ${shareUrl}`;
+  const toDays = (seconds: bigint) => Number(seconds) / 86_400;
 
-            const copyLink = async () => {
-              try {
-              await navigator.clipboard.writeText(shareUrl);
-            setCopied(true);
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
     } catch {
-              setError("Could not copy the link. Select it and copy it manually.");
+      setError("Could not copy the link. Select it and copy it manually.");
     }
   };
 
   const handleAccept = async () => {
     if (!agreement || !contractAddress || !isContractor) return;
-            setBusyAction("accept");
-            setError(null);
-            try {
+    setBusyAction("accept");
+    setError(null);
+    try {
       const signer = await getWalletClient();
-            if (!signer) throw new Error("Your wallet connection is not ready yet.");
-            const typedData = acceptanceTypedData(contractAddress, {
-              agreementId: BigInt(agreementId),
-            client: agreement.client,
-            contractor: agreement.contractor,
-            token: agreement.token,
-            resolver: agreement.resolver,
-            totalAmount: agreement.totalAmount,
-            approvalWindow: agreement.approvalWindow,
-            disputeWindow: agreement.disputeWindow,
-            clientCancellationFee: agreement.clientCancellationFee,
+      if (!signer) throw new Error("Your wallet connection is not ready yet.");
+      const typedData = acceptanceTypedData(contractAddress, {
+        agreementId: BigInt(agreementId),
+        client: agreement.client,
+        contractor: agreement.contractor,
+        token: agreement.token,
+        resolver: agreement.resolver,
+        totalAmount: agreement.totalAmount,
+        approvalWindow: agreement.approvalWindow,
+        disputeWindow: agreement.disputeWindow,
+        clientCancellationFee: agreement.clientCancellationFee,
         milestones: milestones.map((milestone) => ({
-              amount: milestone.amount,
-            descriptionHash: milestone.descriptionHash,
+          amount: milestone.amount,
+          descriptionHash: milestone.descriptionHash,
         })),
       });
-            const signature = await signer.signTypedData(typedData);
-            const response = await fetch("/api/acceptance", {
-              method: "POST",
-            headers: {"Content-Type": "application/json" },
-            body: JSON.stringify({agreementId, signature}),
-          });
-            const body = (await response.json()) as {error ?: string};
-            if (!response.ok) throw new Error(body.error ?? "Could not record your acceptance.");
-          setRefreshTick((current) => current + 1);
-          } catch (acceptError) {
-              setError(acceptError instanceof Error ? acceptError.message : "Could not accept the agreement.");
-          } finally {
-              setBusyAction(null);
-          }
-        };
-    const handleClose = async (kind: "declined" | "withdrawn") => {
+      const signature = await signer.signTypedData(typedData);
+      const response = await fetch("/api/acceptance", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agreementId, signature }),
+      });
+      const body = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(body.error ?? "Could not record your acceptance.");
+            setAcceptedAt(new Date().toISOString());
+      setRefreshTick((current) => current + 1);
+    } catch (acceptError) {
+      setError(acceptError instanceof Error ? acceptError.message : "Could not accept the agreement.");
+    } finally {
+      setBusyAction(null);
+    }
+  };
+  const handleClose = async (kind: "declined" | "withdrawn") => {
     if (!agreement || !contractAddress) return;
     setBusyAction("close");
     setError(null);
@@ -333,13 +336,14 @@ const toDays = (seconds: bigint) => Number(seconds) / 86_400;
       });
       const body = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(body.error ?? "Could not close the agreement.");
+            setClosure(kind);
       setRefreshTick((current) => current + 1);
     } catch (closeError) {
       setError(closeError instanceof Error ? closeError.message : "Could not close the agreement.");
     } finally {
       setBusyAction(null);
     }
-  };      
+  };
 
   const getWalletClient = async () => {
     if (!walletClient || !authenticated || !address) return null;
@@ -469,12 +473,12 @@ const toDays = (seconds: bigint) => Number(seconds) / 86_400;
 
       addTxLog(action, hash);
       if (!(await updateTxLog(hash))) throw new Error("The transaction failed or could not be confirmed. Check its status below.");
-            void fetch("/api/notify", {
+      void fetch("/api/notify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ agreementId, txHash: hash }),
       }).catch(() => undefined);
-            if (action === "cancel") {
+      if (action === "cancel") {
         await fetch("/api/cancellation", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -483,12 +487,13 @@ const toDays = (seconds: bigint) => Number(seconds) / 86_400;
       }
       setRefreshTick((current) => current + 1);
     } catch (actionError) {
-      setError(actionError instanceof Error ? friendlyChainError(actionError.message) : "The transaction could not be completed.");    } finally {
+      setError(actionError instanceof Error ? friendlyChainError(actionError.message) : "The transaction could not be completed.");
+    } finally {
       setBusyAction(null);
     }
   };
 
-    const handleTimeoutRelease = async (milestoneIndex: number) => {
+  const handleTimeoutRelease = async (milestoneIndex: number) => {
     setBusyAction(`timeout-${milestoneIndex}`);
     setError(null);
     try {
@@ -568,7 +573,7 @@ const toDays = (seconds: bigint) => Number(seconds) / 86_400;
           <div className="rounded-3xl border border-slate-800 bg-slate-900 p-8 text-slate-200">Loading agreement details…</div>
         ) : agreement ? (
           <>
-                      {agreement.status === 0 && closure ? (
+            {agreement.status === 0 && closure ? (
               <section className="mb-6 border border-slate-700 bg-slate-900 p-4">
                 <h2 className="font-semibold text-white">
                   {closure === "declined" ? "The contractor declined this agreement" : "The client withdrew this agreement"}
@@ -579,7 +584,7 @@ const toDays = (seconds: bigint) => Number(seconds) / 86_400;
               </section>
             ) : null}
 
-            {agreement.status === 0 && !closure && (isClient || (isContractor && !acceptedAt)) ? (
+            {agreement.status === 0 && !closure && (isClient || isContractor) ? (
               <section className="mb-6 flex flex-wrap items-center justify-between gap-3 border border-slate-800 bg-slate-900 p-4">
                 <p className="text-sm text-slate-300">
                   {isClient
@@ -596,7 +601,7 @@ const toDays = (seconds: bigint) => Number(seconds) / 86_400;
                 </button>
               </section>
             ) : null}
-            
+
             {isClient && agreement.status === 0 && !closure ? (
               <section className="mb-6 space-y-4 border border-amber-500/30 bg-amber-950/20 p-4">
                 <div>
@@ -708,7 +713,7 @@ const toDays = (seconds: bigint) => Number(seconds) / 86_400;
                 )}
               </section>
             ) : null}
-                       {agreement.status === 3 ? (
+            {agreement.status === 3 ? (
               <section className="mb-6 border border-emerald-500/40 bg-emerald-500/10 p-4">
                 <h2 className="font-semibold text-emerald-200">Completed</h2>
                 <p className="mt-1 text-sm text-emerald-100">All milestones are settled. This agreement is finished for both sides.</p>
@@ -751,7 +756,7 @@ const toDays = (seconds: bigint) => Number(seconds) / 86_400;
                     {milestones.map((milestone, index) => {
                       const statusNumber = Number(milestone.status);
                       const statusText = milestoneStatusLabels[statusNumber] ?? "Locked";
-                                            const evidence = statusNumber >= 1 ? parseEvidence(milestone.evidenceURI) : null;
+                      const evidence = statusNumber >= 1 ? parseEvidence(milestone.evidenceURI) : null;
                       const canSubmit = isContractor && statusNumber === 0 && agreement.status === 1;
                       const submitted = statusNumber === 1 && agreement.status === 1;
                       const canApprove = isClient && submitted && chainTimestamp !== null && chainTimestamp < milestone.approvalDeadline;
@@ -763,7 +768,7 @@ const toDays = (seconds: bigint) => Number(seconds) / 86_400;
                           <td className="px-4 py-4 text-slate-200">#{index + 1}</td>
                           <td className="px-4 py-4 text-slate-200">
                             <div className="max-w-md break-words">{details?.[index] || milestone.descriptionURI || "No note on file"}</div>
-                                                        {evidence && (evidence.note || evidence.link) ? (
+                            {evidence && (evidence.note || evidence.link) ? (
                               <div className="mt-2 max-w-md rounded-lg border border-teal-500/30 bg-teal-950/20 p-3 text-xs">
                                 <p className="font-semibold text-teal-200">Delivered by the contractor</p>
                                 {evidence.note ? (
@@ -938,7 +943,7 @@ const toDays = (seconds: bigint) => Number(seconds) / 86_400;
                     hasOutstanding
                       ? setError("A milestone is waiting for review or in dispute. Approve it, let it release, or resolve the dispute first, then cancel.")
                       : void handleAction("cancel")
-                  }                  disabled={busyAction !== null}
+                  } disabled={busyAction !== null}
                   className="w-full border border-red-500/40 bg-red-500/10 px-4 py-2.5 text-sm font-semibold text-red-200 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
                 >
                   {busyAction === "cancel" ? "Cancelling agreement…" : "Cancel agreement"}
@@ -946,7 +951,7 @@ const toDays = (seconds: bigint) => Number(seconds) / 86_400;
               </section>
             ) : null}
 
-                        {canAct ? (
+            {canAct ? (
               <section id="chat" className="mt-8 rounded-3xl border border-slate-800 bg-slate-900 p-5">
                 <h2 className="text-lg font-semibold text-white">
                   Chat with the {isClient ? "contractor" : "client"}

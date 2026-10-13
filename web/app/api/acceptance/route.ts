@@ -23,7 +23,7 @@ export async function GET(request: Request) {
     .slice(0, 100);
   if (ids.length === 0) return NextResponse.json({ accepted: {} });
   try {
-    return NextResponse.json({ accepted: await getAcceptances(getEscrowAddress(), ids) });
+return NextResponse.json({ accepted: await getAcceptances(getEscrowAddress(), ids) }, { headers: { "Cache-Control": "no-store" } });
   } catch {
     return NextResponse.json({ error: "Could not load acceptances." }, { status: 500 });
   }
