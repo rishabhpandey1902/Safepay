@@ -300,7 +300,7 @@ export default function AgreementPage() {
       });
       const body = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(body.error ?? "Could not record your acceptance.");
-            setAcceptedAt(new Date().toISOString());
+      setAcceptedAt(new Date().toISOString());
       setRefreshTick((current) => current + 1);
     } catch (acceptError) {
       setError(acceptError instanceof Error ? acceptError.message : "Could not accept the agreement.");
@@ -342,7 +342,7 @@ export default function AgreementPage() {
       });
       const body = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(body.error ?? "Could not close the agreement.");
-            setClosure(kind);
+      setClosure(kind);
       setRefreshTick((current) => current + 1);
     } catch (closeError) {
       setError(closeError instanceof Error ? closeError.message : "Could not close the agreement.");
@@ -350,7 +350,7 @@ export default function AgreementPage() {
       setBusyAction(null);
     }
   };
-    const sendMilestoneNote = async (index: number, kind: "changes" | "update") => {
+  const sendMilestoneNote = async (index: number, kind: "changes" | "update") => {
     const text = (noteDraft[index] ?? "").trim();
     if (!text) {
       setError("Write a short message first.");
@@ -478,16 +478,27 @@ export default function AgreementPage() {
         })) as `0x${string}`;
       } else if (action === "dispute") {
         if (milestoneIndex === undefined) return;
-        const data = submitForm[milestoneIndex] ?? { note: "", link: "" };
-  const note = data.note.trim();
-  const link = data.link.trim();
-        if (!note) throw new Error("Explain why you are raising a dispute. The resolver will read it.");
-        if (link && !/^https?:\/\//i.test(link)) throw new Error("Links must start with http:// or https://.");
+
+        const data = disputeForm[milestoneIndex] ?? { note: "", link: "" };
+        const note = data.note.trim();
+        const link = data.link.trim();
+
+        if (!note) {
+          throw new Error("Explain why you are raising a dispute. The resolver will read it.");
+        }
+
+        if (link && !/^https?:\/\//i.test(link)) {
+          throw new Error("Links must start with http:// or https://.");
+        }
+
         const packed = JSON.stringify({ n: note, l: link });
+
         if (new TextEncoder().encode(packed).length > 2000) {
           throw new Error("The reason and link are too long. Shorten them and add details in the dispute chat.");
         }
+
         const reasonHash = keccak256(toBytes(packed));
+
         hash = (await walletClient.writeContract({
           address: contractAddress,
           abi: safePayEscrowAbi,
@@ -608,7 +619,7 @@ export default function AgreementPage() {
             {visibleError}
           </div>
         ) : null}
-                {notice ? (
+        {notice ? (
           <div className="mb-6 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
             {notice}
           </div>
@@ -917,7 +928,7 @@ export default function AgreementPage() {
                                 </button>
                               ) : null}
 
-                                                            {submitted && (isClient || isContractor) ? (
+                              {submitted && (isClient || isContractor) ? (
                                 <div className="rounded-xl border border-slate-700 bg-slate-950/80 p-3">
                                   <p className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-400">
                                     {isClient ? "Request changes" : "Send updated delivery"}
