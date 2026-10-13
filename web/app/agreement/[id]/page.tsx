@@ -181,21 +181,23 @@ export default function AgreementPage() {
 
 
   useEffect(() => {
+    const refresh = () => setRefreshTick((current) => current + 1);
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") refresh();
+    }, 10_000);
+    window.addEventListener("safepay:refresh", refresh);
+    window.addEventListener("focus", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("safepay:refresh", refresh);
+      window.removeEventListener("focus", refresh);
+    };
+  }, []);
+
+  useEffect(() => {
     if (configurationError || routeError) return;
     let active = true;
-    useEffect(() => {
-      const refresh = () => setRefreshTick((current) => current + 1);
-      const timer = window.setInterval(() => {
-        if (document.visibilityState === "visible") refresh();
-      }, 10_000);
-      window.addEventListener("safepay:refresh", refresh);
-      window.addEventListener("focus", refresh);
-      return () => {
-        window.clearInterval(timer);
-        window.removeEventListener("safepay:refresh", refresh);
-        window.removeEventListener("focus", refresh);
-      };
-    }, []);
+
     const readJson = async <T,>(url: string): Promise<T | null> => {
       try {
         const response = await fetch(url, { cache: "no-store" });
